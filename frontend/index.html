@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HIWIN Support Agent — demo</title>
+<!-- Markdown renderer (CDN). Vendor this file locally if the browser is offline. -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 880px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.25rem; }
+  .note { color: #888; font-size: .85rem; margin: -.4rem 0 1rem; }
+  textarea { width: 100%; min-height: 80px; padding: .6rem; font-size: 1rem; box-sizing: border-box; }
+  .row { display: flex; gap: .5rem; align-items: center; margin: .6rem 0; }
+  select, button { padding: .5rem .8rem; font-size: 1rem; }
+  button { cursor: pointer; }
+  #status { color: #666; font-size: .9rem; margin: .5rem 0; min-height: 1.2em; }
+  #answer { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin-top: 1rem; }
+  #answer:empty { display: none; }
+  #answer table { border-collapse: collapse; margin: .5rem 0; }
+  #answer th, #answer td { border: 1px solid #ccc; padding: .3rem .55rem; }
+  #answer img { max-width: 100%; height: auto; display: block; margin: .6rem 0; border: 1px solid #eee; }
+  #sources { margin-top: 1rem; font-size: .9rem; color: #333; }
+  #sources li { margin: .2rem 0; }
+  code { background: #f3f3f3; padding: .1rem .3rem; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <h1>HIWIN Support Agent — demo</h1>
+  <p class="note">Example frontend for the HIWIN Support Agent Backend. The service is API-first; this page just calls <code>POST /chat</code>.</p>
+  <textarea id="prompt" placeholder="Ask about a HIWIN product…">HGW20 load capacity</textarea>
+  <div class="row">
+    <label>Language:
+      <select id="language">
+        <option value="en">English (en)</option>
+        <option value="jp">日本語 (jp)</option>
+        <option value="tc">繁體中文 (tc)</option>
+      </select>
+    </label>
+    <button id="send">Send</button>
+    <span style="font-size:.8rem;color:#999">Ctrl+Enter to send</span>
+  </div>
+  <div id="status"></div>
+  <div id="answer"></div>
+  <div id="sources"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function send() {
+  const prompt = $('prompt').value.trim();
+  const language = $('language').value;
+  if (!prompt) return;
+
+  $('send').disabled = true;
+  $('status').textContent = 'Thinking… (retrieval + model; a cold model swap can take ~20s)';
+  $('answer').innerHTML = '';
+  $('sources').innerHTML = '';
+
+  try {
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, language }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+
+    // Same-origin: image src="/static/HIWIN/..." in the markdown resolves to this backend.
+    $('answer').innerHTML = marked.parse(data.response || '');
+
+    const srcs = data.sources || [];
+    if (srcs.length) {
+      $('sources').innerHTML = '<strong>Sources</strong><ul>' + srcs.map((s) =>
+        '<li>' + (s.web_path
+          ? '<a href="' + s.web_path + '" target="_blank">' + (s.file_name || s.web_path) + '</a>'
+          : [s.product_type, s.page_number ? 'p.' + s.page_number : '', s.file_name].filter(Boolean).join(' — ')
+        ) + '</li>').join('') + '</ul>';
+    }
+
+    const tools = (data.trace || []).map((t) => t.tool).join(', ') || '(none)';
+    $('status').textContent = 'Done — language: ' + (data.language || '') + ' · tools: ' + tools;
+  } catch (e) {
+    $('status').textContent = 'Error: ' + e.message;
+  } finally {
+    $('send').disabled = false;
+  }
+}
+
+$('send').addEventListener('click', send);
+$('prompt').addEventListener('keydown', (e) => { if (e.ctrlKey && e.key === 'Enter') send(); });
+</script>
+</body>
+</html>

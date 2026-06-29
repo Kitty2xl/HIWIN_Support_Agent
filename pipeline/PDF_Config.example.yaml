@@ -1,0 +1,19 @@
+# PDF_Config.yaml — tells the pipeline which PDFs to process.
+#
+# Copy this file to  <ROOT_PATH>/PDF_Config.yaml  and fill it in.
+# It is intentionally EMPTY by default — add your own entries below.
+# See the README section "Configuring which PDFs to process" for the full format.
+#
+# Quick shape (nested folders → a leaf per PDF):
+#
+#   ballspline:                 # product  → PDFs/ballspline/ , DB table data_ballspline
+#     user_manual:              # any depth of grouping sub-folders
+#       HG_Series.pdf:          # leaf key = the actual PDF filename
+#         language: en          # en | jp | tc
+#         pages_to_exclude: [0, 1]      # 0-indexed pages to skip
+#       LM_Guide.pdf:
+#         language: tc
+#         pages_to_include: [5, 6, 7]   # if set, ONLY these pages run
+#
+# (Leave the file empty until you add real entries — an empty config simply
+#  means "no PDF tasks".)

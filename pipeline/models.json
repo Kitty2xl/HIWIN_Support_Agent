@@ -1,0 +1,13 @@
+{
+  "_comment": "PLACEHOLDER — model_dir below is a '/path/to/...' dummy value and is NOT real; you MUST change it to the folder llama.cpp/llama-swap loads GGUFs from (must match the '-m' paths in your llama-swap config). repo_id values are also placeholders — fill them only if you want the in-app downloader (the Hugging Face repo hosting each .gguf); leave them if the files already exist in model_dir. filenames are taken from the llama-swap config. Test models and GLM5.2 were left out on purpose.",
+  "model_dir": "/path/to/llama/models",
+  "hf_token": "",
+  "models": [
+    {"name": "Support_Agent_Qwen3.6 (chat/vision)", "repo_id": "<owner>/<repo>", "filename": "Qwen3.6-35B-A3B-UD-Q4_K_XL_MTP.gguf"},
+    {"name": "RAG_Pipeline_Pass34 (chat/vision)",   "repo_id": "<owner>/<repo>", "filename": "Qwen3.6-35B-A3B-UD-IQ4_XS_MTP.gguf"},
+    {"name": "mmproj (35B-A3B vision projector)",    "repo_id": "<owner>/<repo>", "filename": "mmproj-35BA3B.gguf"},
+    {"name": "Embedding_Qwen3.6",                    "repo_id": "<owner>/<repo>", "filename": "Qwen3-Embedding-4B-Q8_0.gguf"},
+    {"name": "Reranker_Qwen3.6",                     "repo_id": "<owner>/<repo>", "filename": "Qwen3-Reranker-4B-Q8_0.gguf"},
+    {"name": "RAG_Pipeline_Pass5Ingest",            "repo_id": "<owner>/<repo>", "filename": "gemma-4-E4B-it-UD-Q4_K_XL.gguf"}
+  ]
+}
