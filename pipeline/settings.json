@@ -1,0 +1,42 @@
+{
+  "_comment_paths": "PLACEHOLDERS — ROOT_PATH and IMAGE_TARGET_ROOT below are '/path/to/...' dummy values and are NOT real. You MUST change both to your machine's actual paths before running, or the pipeline will fail. Everything else is ready to use. See the README ('What you must edit before the first run').",
+  "ROOT_PATH": "/path/to/HIWIN",
+  "IMAGE_TARGET_ROOT": "/path/to/open_webui/static/HIWIN",
+  "LLM_BASE_URL": "http://localhost:11400/v1",
+  "LLAMA_SWAP_URL": "http://127.0.0.1:11400",
+  "LLM_API_KEY": "sk-no-key-required",
+  "LLM_TIMEOUT": 60000,
+  "LLM_PREHEAT_TIMEOUT": 120,
+  "LLM_MAX_RETRIES": 3,
+  "PASS34_NODE_URLS": [
+    "http://localhost:11400/v1"
+  ],
+  "PASS34_NODE_SWAP_URLS": [
+    "http://127.0.0.1:11400"
+  ],
+  "MODEL_PASS_2": "RAG_Pipeline_Pass34",
+  "MODEL_PASS_2B": "RAG_Pipeline_Pass34",
+  "MODEL_PASS_3": "RAG_Pipeline_Pass34",
+  "MODEL_PASS_3B": "RAG_Pipeline_Pass5Ingest",
+  "MODEL_PASS_4": "RAG_Pipeline_Pass5Ingest",
+  "SCORE_THRESHOLD": 0.5,
+  "PASS_1_RENDER_DPI": 200,
+  "BATCH_SIZE_PASS_1": 16,
+  "ORT_INTRA_THREADS": 4,
+  "MAX_PDF_WORKERS": 4,
+  "CONCURRENCY": 5,
+  "CONCURRENCY_PASS_4": 5,
+  "PASS_2_SKIP_BLANK_PAGES": true,
+  "PASS_2_BLANK_DRY_RUN": false,
+  "PASS_4_GATE_VALIDATION": true,
+  "TIMEOUT_RETRY_ENABLED": true,
+  "DB_HOST": "localhost",
+  "DB_PORT": "5432",
+  "DB_NAME": "hiwin_rag_db",
+  "DB_USER": "postgres",
+  "DB_PASS": "hiwinpassword",
+  "DB_SCHEMA": "hiwin_rag",
+  "EMBED_BATCH_SIZE": 1024,
+  "INGEST_NUM_WORKERS": 1,
+  "INGEST_BY_PAGE": true
+}

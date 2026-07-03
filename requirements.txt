@@ -1,0 +1,27 @@
+# Python 3.12.7 (pinned - see .python-version). Tested on Windows and Linux.
+#
+# --- Backend (FastAPI support agent: serves POST /chat) ---
+fastapi
+uvicorn[standard]
+psycopg2-binary
+requests
+python-dotenv
+
+# --- Ingestion pipeline (pipeline/ - builds the pgvector DB the backend reads) ---
+# Heavier ML/vision stack; only needed to run the PDF -> DB ingestion, not to
+# serve /chat. Kept here (merged) so one `pip install -r requirements.txt`
+# provisions both halves.
+numpy
+opencv-python
+PyMuPDF
+onnxruntime
+openai
+httpx
+aiofiles
+tqdm
+PyYAML
+rich
+huggingface_hub
+llama-index-core
+llama-index-embeddings-openai-like
+llama-index-vector-stores-postgres

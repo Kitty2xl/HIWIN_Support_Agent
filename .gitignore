@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# NOTE: for this internal deployment, the config files that normally hold secrets
+# are intentionally COMMITTED so the whole deployment travels with the code:
+#     .env , pipeline/settings.json , pipeline/models.json
+# Only their absolute file paths must be edited per machine (see the README).
+# >>> If this repo is ever made PUBLIC: re-add these to .gitignore and scrub the
+#     DB password / HF token first. <<<
+
+# Pipeline runtime/output artifacts
+pipeline/**/checkpoint.json
+pipeline/**/pipeline_mapping.json
+
+# Batch-run outputs
+results_*.md
+results_*.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
