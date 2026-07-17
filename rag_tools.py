@@ -1,11 +1,14 @@
 """The four RAG tools, ported from the open-WebUI `Tools` class.
 
-Behaviour is preserved exactly: the `search_query:` embedding prefix, per-table
-LIMIT 15 vector search, `metadata_->>'language_code'` filter, English fallback,
-rerank-to-5, vision analysis of retrieved diagrams, and forgiving table-name
-resolution. The open-WebUI `__event_emitter__` status calls and the
-`Tools`/`Valves` wrapper are removed; configuration now comes from `config`,
-DB access from `db`, and inference from `inference`.
+Ported from the open-WebUI `Tools` class: the `search_query:` embedding prefix,
+per-table vector search, `metadata_->>'language_code'` filter, English fallback,
+reranking, vision analysis of retrieved diagrams, and forgiving table-name
+resolution. Retrieval caps (vector LIMIT, rerank candidate pool, top-K) are now
+config-driven; the reranker's relevance_score is surfaced on each source; and an
+optional per-passage LLM relevance grade drops unhelpful passages after rerank.
+The open-WebUI `__event_emitter__` status calls and the `Tools`/`Valves` wrapper
+are removed; configuration now comes from `config`, DB access from `db`, and
+inference from `inference`.
 
 Retrieval tools return a {"text", "sources"} dict (text for the LLM, sources for
 structured citations); the other tools return a plain string.
@@ -126,19 +129,24 @@ _SOURCE_KEYS = (
 )
 
 
-def _source_from_meta(meta) -> dict:
-    """Whitelist the citation-relevant fields out of a chunk's metadata_."""
+def _source_from_meta(meta, score=None) -> dict:
+    """Whitelist the citation-relevant fields out of a chunk's metadata_,
+    optionally tagging the reranker's relevance score for tuning/inspection."""
     if not isinstance(meta, dict):
         return {}
-    return {k: meta[k] for k in _SOURCE_KEYS if meta.get(k) is not None}
+    src = {k: meta[k] for k in _SOURCE_KEYS if meta.get(k) is not None}
+    if src and score is not None:
+        src["rerank_score"] = round(float(score), 4)
+    return src
 
 
 def _rerank_items(query: str, items: list, top_n: int) -> list:
-    """Rerank a list of (text, meta) pairs, returning the top-n pairs.
+    """Rerank (text, meta) pairs, returning the top-n as (text, meta, score) triples.
 
     Truncate each passage for SCORING ONLY — rerankers have a context limit and
     llama.cpp returns 500 on oversized input. The ranked indices map back to the
-    original full (text, meta) pairs, so nothing is lost downstream.
+    original full (text, meta) pairs, so nothing is lost downstream. The reranker's
+    relevance_score is carried through so callers can surface / threshold on it.
     """
     if not items:
         return []
@@ -147,10 +155,57 @@ def _rerank_items(query: str, items: list, top_n: int) -> list:
         scoring_docs = [text[:budget] for text, _ in items]
         rerank_data = inference.rerank(query, scoring_docs, top_n)
         if "results" in rerank_data:
-            return [items[res["index"]] for res in rerank_data["results"]]
+            return [
+                (items[res["index"]][0], items[res["index"]][1], res.get("relevance_score"))
+                for res in rerank_data["results"]
+            ]
     except Exception as e:
         print(f"Reranking failed: {e}")
-    return items[:top_n]
+    # Fallback: reranker unavailable — keep original order, score unknown.
+    return [(text, meta, None) for text, meta in items[:top_n]]
+
+
+async def _grade_passage(query: str, text: str) -> bool:
+    """Ask the LLM whether a single passage helps answer the query (YES/NO).
+
+    Fail-open: if the grading call errors, keep the passage rather than silently
+    dropping a possibly-relevant result.
+    """
+    messages = [{
+        "role": "user",
+        "content": (
+            "You are judging whether a retrieved passage helps answer a user's "
+            "question. Reply with exactly one word: YES or NO.\n\n"
+            f"Question: {query}\n\n"
+            f"Passage:\n{text[: config.GRADING_DOC_MAX_CHARS]}\n\n"
+            "Does this passage contain information that helps answer the question?"
+        ),
+    }]
+    try:
+        answer = await asyncio.to_thread(
+            inference.chat_content, messages, config.LANGUAGE_MODEL, config.GRADING_TIMEOUT
+        )
+        return answer.strip().upper().startswith("Y")
+    except Exception as e:
+        print(f"Grading failed (keeping passage): {e}")
+        return True
+
+
+async def _grade_items(query: str, items: list) -> list:
+    """Drop passages the LLM judges unhelpful. Grades run concurrently.
+
+    `items` are (text, meta, score) triples. If grading rejects everything, fall
+    back to the single best passage — a total wipe is more likely an over-strict
+    sweep than a genuinely empty result.
+    """
+    if not config.GRADING_ENABLED or not items:
+        return items
+    verdicts = await asyncio.gather(*(_grade_passage(query, it[0]) for it in items))
+    kept = [it for it, keep in zip(items, verdicts) if keep]
+    if not kept:
+        print("Grading rejected all passages; falling back to top-1.")
+        return items[:1]
+    return kept
 
 
 # --- TOOL 1: MANUAL SEARCH --------------------------------------------------
@@ -161,9 +216,9 @@ async def db_search_technical_manuals(
     product_table: list,
 ) -> str:
     try:
-        initial_top_K = 15  # per-table vector-search LIMIT
-        rerank_candidate_K = 15  # passages fed into the reranker
-        final_top_K = 5  # passages returned after reranking
+        initial_top_K = config.VECTOR_TOP_K  # per-table vector-search LIMIT
+        rerank_candidate_K = config.RERANK_CANDIDATE_K  # passages fed into the reranker
+        final_top_K = config.RERANK_TOP_K  # passages returned after reranking
 
         query_vector = await asyncio.to_thread(
             inference.embed, f"search_query: {query}", config.EMBEDDING_MODEL
@@ -266,15 +321,16 @@ async def db_search_technical_manuals(
         reranked = await asyncio.to_thread(
             _rerank_items, query, candidate_items, final_top_K
         )
+        reranked = await _grade_items(query, reranked)
 
-        passages = [text for text, _ in reranked]
+        passages = [text for text, _, _ in reranked]
         encoded = [_encode_image_paths(text) for text in passages]
 
         vision_analysis = await _run_vision_analysis(query, passages)
         if vision_analysis:
             encoded.append(f"[Visual Analysis of Retrieved Diagrams]\n{vision_analysis}")
 
-        sources = [s for s in (_source_from_meta(m) for _, m in reranked) if s]
+        sources = [s for s in (_source_from_meta(m, score) for _, m, score in reranked) if s]
         return {"text": "\n---\n".join(encoded), "sources": sources}
 
     except Exception as e:
@@ -349,16 +405,19 @@ async def db_search_certifications(query: str, language_code: str = "en") -> str
                 return "No certifications or compliance documents were found for this query."
 
         items = [(row[0], row[1]) for row in all_results]
-        reranked = await asyncio.to_thread(_rerank_items, query, items, 10)
+        reranked = await asyncio.to_thread(
+            _rerank_items, query, items, config.CERT_RERANK_TOP_K
+        )
+        reranked = await _grade_items(query, reranked)
 
-        passages = [text for text, _ in reranked]
+        passages = [text for text, _, _ in reranked]
         encoded = [_encode_image_paths(text) for text in passages]
 
         vision_analysis = await _run_vision_analysis(query, passages)
         if vision_analysis:
             encoded.append(f"[Visual Analysis of Retrieved Diagrams]\n{vision_analysis}")
 
-        sources = [s for s in (_source_from_meta(m) for _, m in reranked) if s]
+        sources = [s for s in (_source_from_meta(m, score) for _, m, score in reranked) if s]
         return {"text": "\n---\n".join(encoded), "sources": sources}
 
     except Exception as e:

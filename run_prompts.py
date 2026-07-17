@@ -118,7 +118,8 @@ def main(argv=None):
                 for s in srcs:
                     bits = [f"{k}={s[k]}" for k in
                             ("file_name", "page_number", "product_type",
-                             "language_code", "web_path") if s.get(k) is not None]
+                             "language_code", "web_path", "rerank_score")
+                            if s.get(k) is not None]
                     out.write(f"- {' · '.join(bits) if bits else json.dumps(s, ensure_ascii=False)}\n")
             else:
                 out.write("(none)\n")

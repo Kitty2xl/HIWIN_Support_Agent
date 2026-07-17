@@ -39,6 +39,15 @@ RERANKER_MODEL = _env("RERANKER_MODEL", "Reranker_Qwen3.6")
 # batch size (--ubatch-size); llama.cpp returns 500 on oversized input.
 RERANK_DOC_MAX_CHARS = int(_env("RERANK_DOC_MAX_CHARS", "2000"))
 CHAT_TIMEOUT = int(_env("CHAT_TIMEOUT", "120"))
+
+# --- Retrieval caps (how many passages flow through each stage) ---
+# Vector search pulls VECTOR_TOP_K per table; the pooled best RERANK_CANDIDATE_K
+# are sent to the reranker, which keeps RERANK_TOP_K. If you raise RERANK_TOP_K,
+# raise RERANK_CANDIDATE_K to match so the reranker has enough to choose from.
+VECTOR_TOP_K       = int(_env("VECTOR_TOP_K", "15"))       # per-table SQL LIMIT
+RERANK_CANDIDATE_K = int(_env("RERANK_CANDIDATE_K", "20"))  # passages fed to reranker
+RERANK_TOP_K       = int(_env("RERANK_TOP_K", "10"))       # passages kept (manuals)
+CERT_RERANK_TOP_K  = int(_env("CERT_RERANK_TOP_K", "10"))  # passages kept (certifications)
 # Deterministic decoding for the chat/vision model — minimizes numeric drift
 # when the model transcribes values out of dense spec tables.
 TEMPERATURE = float(_env("TEMPERATURE", "0"))
@@ -68,6 +77,15 @@ DEFAULT_LANGUAGE = _env("DEFAULT_LANGUAGE", "tc")  # per System_prompt STATE 0
 
 def _bool_env(key: str, default: str) -> bool:
     return _env(key, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+# --- Relevance grading (per-passage "does this help?" second pass) ---
+# After reranking, each surviving passage is graded YES/NO by the LLM and the
+# NOs are dropped. Costs one LLM call per passage (run concurrently); set
+# GRADING_ENABLED=false to skip the pass entirely.
+GRADING_ENABLED       = _bool_env("GRADING_ENABLED", "true")
+GRADING_DOC_MAX_CHARS = int(_env("GRADING_DOC_MAX_CHARS", "2000"))
+GRADING_TIMEOUT       = int(_env("GRADING_TIMEOUT", "30"))
 
 
 # --- Chat logging ---
