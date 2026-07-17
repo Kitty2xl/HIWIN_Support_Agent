@@ -51,6 +51,7 @@ class ChatResponse(BaseModel):
     language: str
     sources: List[dict] = []
     trace: List[dict] = []
+    metrics: dict = {}
 
 
 def build_user_message(prompt: str, language: str) -> str:
@@ -90,6 +91,7 @@ async def chat(req: ChatRequest):
     t0 = time.perf_counter()
     answer = await agent.run(system, user_msg, trace=trace, sources=sources, metrics=metrics)
     latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+    metrics["latency_ms"] = latency_ms  # surface end-to-end time in the response too
 
     # Persist the exchange (best-effort; never blocks or breaks the response).
     if config.CHAT_LOG_ENABLED:
@@ -102,4 +104,6 @@ async def chat(req: ChatRequest):
         except Exception as e:  # noqa: BLE001
             print(f"WARNING: chat log dispatch failed: {e}")
 
-    return ChatResponse(response=answer, language=language, sources=sources, trace=trace)
+    return ChatResponse(
+        response=answer, language=language, sources=sources, trace=trace, metrics=metrics
+    )

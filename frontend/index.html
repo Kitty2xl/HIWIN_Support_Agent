@@ -23,6 +23,30 @@
   #sources { margin-top: 1rem; font-size: .9rem; color: #333; }
   #sources li { margin: .2rem 0; }
   code { background: #f3f3f3; padding: .1rem .3rem; border-radius: 4px; }
+
+  /* --- Debug panel --- */
+  #debug { margin-top: 1rem; font-size: .85rem; }
+  #debug[hidden] { display: none; }
+  #debug .panel { border: 1px solid #d9d9e3; border-radius: 8px; background: #fbfbfd; padding: .8rem 1rem; }
+  #debug h2 { font-size: .95rem; margin: 0 0 .5rem; }
+  .dbg-metrics { display: flex; flex-wrap: wrap; gap: .3rem .9rem; margin-bottom: .8rem; color: #333; }
+  .dbg-metrics .kv b { color: #555; font-weight: 600; }
+  .dbg-trace { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+  .dbg-trace > li { border-left: 3px solid #c7c7d1; padding: .35rem 0 .6rem .7rem; margin-left: .3rem; position: relative; }
+  .dbg-trace > li::before { counter-increment: step; content: counter(step); position: absolute; left: -.75rem; top: .3rem;
+    background: #6a6a80; color: #fff; border-radius: 50%; width: 1.15rem; height: 1.15rem; font-size: .7rem;
+    display: flex; align-items: center; justify-content: center; }
+  .dbg-tool { font-weight: 600; font-family: ui-monospace, Menlo, Consolas, monospace; color: #2a2a55; }
+  .dbg-args { margin: .2rem 0; }
+  .dbg-arg { display: inline-block; background: #ececf4; border-radius: 4px; padding: .05rem .35rem; margin: .1rem .25rem .1rem 0;
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .8rem; }
+  .dbg-result { background: #fff; border: 1px solid #e3e3ea; border-radius: 6px; padding: .4rem .55rem; margin: .3rem 0 0;
+    max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: .78rem; color: #333; }
+  .dbg-empty { color: #b00; font-style: italic; }
+  #debug pre.raw { max-height: 320px; overflow: auto; background: #fff; border: 1px solid #e3e3ea; border-radius: 6px; padding: .5rem; }
+  #debug details { margin-top: .8rem; }
+  #debug summary { cursor: pointer; color: #444; }
+  .toggle { font-size: .85rem; color: #555; margin-left: auto; display: flex; align-items: center; gap: .3rem; }
 </style>
 </head>
 <body>
@@ -40,13 +64,16 @@
     </label>
     <button id="send">Send</button>
     <span style="font-size:.8rem;color:#999">Ctrl+Enter to send</span>
+    <label class="toggle"><input type="checkbox" id="debugToggle" checked> Debug view</label>
   </div>
   <div id="status"></div>
   <div id="answer"></div>
   <div id="sources"></div>
+  <div id="debug" hidden></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
 async function send() {
   const prompt = $('prompt').value.trim();
@@ -57,6 +84,7 @@ async function send() {
   $('status').textContent = 'Thinking… (retrieval + model; a cold model swap can take ~20s)';
   $('answer').innerHTML = '';
   $('sources').innerHTML = '';
+  $('debug').innerHTML = '';
 
   try {
     const res = await fetch('/chat', {
@@ -69,15 +97,8 @@ async function send() {
 
     // Same-origin: image src="/static/HIWIN/..." in the markdown resolves to this backend.
     $('answer').innerHTML = marked.parse(data.response || '');
-
-    const srcs = data.sources || [];
-    if (srcs.length) {
-      $('sources').innerHTML = '<strong>Sources</strong><ul>' + srcs.map((s) =>
-        '<li>' + (s.web_path
-          ? '<a href="' + s.web_path + '" target="_blank">' + (s.file_name || s.web_path) + '</a>'
-          : [s.product_type, s.page_number ? 'p.' + s.page_number : '', s.file_name].filter(Boolean).join(' — ')
-        ) + '</li>').join('') + '</ul>';
-    }
+    renderSources(data.sources || []);
+    renderDebug(data);
 
     const tools = (data.trace || []).map((t) => t.tool).join(', ') || '(none)';
     $('status').textContent = 'Done — language: ' + (data.language || '') + ' · tools: ' + tools;
@@ -88,8 +109,64 @@ async function send() {
   }
 }
 
+function renderSources(srcs) {
+  if (!srcs.length) { $('sources').innerHTML = ''; return; }
+  $('sources').innerHTML = '<strong>Sources</strong><ul>' + srcs.map((s) => {
+    const score = (s.rerank_score != null) ? ' <code>score ' + s.rerank_score + '</code>' : '';
+    const label = s.web_path
+      ? '<a href="' + esc(s.web_path) + '" target="_blank">' + esc(s.file_name || s.web_path) + '</a>'
+      : esc([s.product_type, s.page_number ? 'p.' + s.page_number : '', s.file_name].filter(Boolean).join(' — '));
+    return '<li>' + label + score + '</li>';
+  }).join('') + '</ul>';
+}
+
+function renderDebug(data) {
+  const m = data.metrics || {};
+  const trace = data.trace || [];
+  const kv = (k, v) => '<span class="kv"><b>' + k + ':</b> ' + esc(v == null ? '—' : v) + '</span>';
+
+  let html = '<div class="panel"><h2>Debug — agent trace</h2>';
+
+  html += '<div class="dbg-metrics">'
+    + kv('language', data.language)
+    + kv('iterations', m.agent_iterations)
+    + kv('tool calls', m.tool_calls)
+    + kv('llm calls', m.llm_calls)
+    + kv('tokens (p+c=t)', (m.prompt_tokens || 0) + '+' + (m.completion_tokens || 0) + '=' + (m.total_tokens || 0))
+    + kv('latency', (m.latency_ms != null ? m.latency_ms + ' ms' : '—'))
+    + '</div>';
+
+  if (!trace.length) {
+    html += '<p class="dbg-empty">No tool calls were made for this request.</p>';
+  } else {
+    html += '<ol class="dbg-trace">' + trace.map((t) => {
+      const args = t.args || {};
+      const argHtml = Object.keys(args).length
+        ? '<div class="dbg-args">' + Object.keys(args).map((k) =>
+            '<span class="dbg-arg">' + esc(k) + '=' + esc(JSON.stringify(args[k])) + '</span>').join('') + '</div>'
+        : '';
+      const result = (t.result == null || t.result === '')
+        ? '<div class="dbg-result dbg-empty">(empty result)</div>'
+        : '<div class="dbg-result">' + esc(t.result) + '</div>';
+      return '<li><div class="dbg-tool">' + esc(t.tool) + '</div>' + argHtml + result + '</li>';
+    }).join('') + '</ol>';
+  }
+
+  html += '<details><summary>Raw response JSON</summary>'
+    + '<pre class="raw">' + esc(JSON.stringify(data, null, 2)) + '</pre></details>';
+
+  html += '</div>';
+  $('debug').innerHTML = html;
+}
+
+function applyDebugVisibility() {
+  $('debug').hidden = !$('debugToggle').checked;
+}
+
 $('send').addEventListener('click', send);
 $('prompt').addEventListener('keydown', (e) => { if (e.ctrlKey && e.key === 'Enter') send(); });
+$('debugToggle').addEventListener('change', applyDebugVisibility);
+applyDebugVisibility();
 </script>
 </body>
 </html>
