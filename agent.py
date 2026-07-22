@@ -98,11 +98,21 @@ async def run(system: str, user_msg: str, trace: list = None,
                 args = {}
             text, srcs = await _run_tool(name, args)
 
-            # Accumulate citations across all tool calls, de-duplicated.
+            # Accumulate citations across all tool calls, de-duplicated on
+            # identity EXCLUDING rerank_score (the same chunk can come back from
+            # two searches with different scores — keep one, at its best score).
             if sources is not None:
                 for s in srcs:
-                    if s not in sources:
+                    ident = {k: v for k, v in s.items() if k != "rerank_score"}
+                    match = next(
+                        (x for x in sources
+                         if {k: v for k, v in x.items() if k != "rerank_score"} == ident),
+                        None,
+                    )
+                    if match is None:
                         sources.append(s)
+                    elif (s.get("rerank_score") or 0) > (match.get("rerank_score") or 0):
+                        match["rerank_score"] = s["rerank_score"]
 
             if trace is not None:
                 preview = (

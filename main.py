@@ -10,6 +10,7 @@ Run:  uvicorn main:app --host 0.0.0.0 --port 8079
 
 import asyncio
 import os
+import re
 import time
 from typing import List, Optional
 
@@ -60,6 +61,26 @@ def build_user_message(prompt: str, language: str) -> str:
     return f"[Language Code: {language}]\n{prompt}"
 
 
+# Matches the model's inline page citations, e.g. "[Page 52]", "page 52", "p.52".
+# Paired with the System_prompt 'Citation Fidelity' rule, which makes the model
+# cite the page from each passage's [SOURCE: … page=N …] tag.
+_CITED_PAGE_RE = re.compile(r"(?:page|p\.)\s*(\d+)", re.IGNORECASE)
+
+
+def prune_sources_to_cited(answer: str, sources: List[dict]) -> List[dict]:
+    """Keep only sources whose page_number the answer actually cites.
+
+    Falls back to the full list when the answer cites nothing parseable, so a
+    formatting slip never blanks out provenance entirely. Page numbers are
+    compared as strings since metadata_->>'page_number' comes back as text.
+    """
+    cited = set(_CITED_PAGE_RE.findall(answer or ""))
+    if not cited:
+        return sources
+    pruned = [s for s in sources if str(s.get("page_number")) in cited]
+    return pruned or sources
+
+
 # The bundled HTML page is an EXAMPLE/DEMO frontend; the service is API-first.
 _FRONTEND_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "frontend", "index.html"
@@ -92,6 +113,10 @@ async def chat(req: ChatRequest):
     answer = await agent.run(system, user_msg, trace=trace, sources=sources, metrics=metrics)
     latency_ms = round((time.perf_counter() - t0) * 1000, 1)
     metrics["latency_ms"] = latency_ms  # surface end-to-end time in the response too
+
+    # Keep only the sources the answer actually cites (the full retrieval is
+    # still visible per-tool in `trace` for debugging).
+    sources = prune_sources_to_cited(answer, sources)
 
     # Persist the exchange (best-effort; never blocks or breaks the response).
     if config.CHAT_LOG_ENABLED:

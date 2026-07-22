@@ -140,6 +140,30 @@ def _source_from_meta(meta, score=None) -> dict:
     return src
 
 
+def _source_tag(meta) -> str:
+    """A compact, authoritative citation label built from a chunk's metadata_,
+    prepended to the passage text so the model cites the SAME page/file that the
+    structured `sources` list carries — keeping inline citations a subset of the
+    sources (see System_prompt 'Citation Fidelity')."""
+    if not isinstance(meta, dict):
+        return ""
+    bits = []
+    if meta.get("file_name"):
+        bits.append(f"file={meta['file_name']}")
+    if meta.get("page_number") is not None:
+        bits.append(f"page={meta['page_number']}")
+    if meta.get("product_type"):
+        bits.append(f"product={meta['product_type']}")
+    return f"[SOURCE: {' · '.join(bits)}]" if bits else ""
+
+
+def _tag_passage(text: str, meta) -> str:
+    """Prepend the source tag (if any) to an image-path-encoded passage."""
+    body = _encode_image_paths(text)
+    tag = _source_tag(meta)
+    return f"{tag}\n{body}" if tag else body
+
+
 def _rerank_items(query: str, items: list, top_n: int) -> list:
     """Rerank (text, meta) pairs, returning the top-n as (text, meta, score) triples.
 
@@ -324,7 +348,7 @@ async def db_search_technical_manuals(
         reranked = await _grade_items(query, reranked)
 
         passages = [text for text, _, _ in reranked]
-        encoded = [_encode_image_paths(text) for text in passages]
+        encoded = [_tag_passage(text, meta) for text, meta, _ in reranked]
 
         vision_analysis = await _run_vision_analysis(query, passages)
         if vision_analysis:
@@ -411,7 +435,7 @@ async def db_search_certifications(query: str, language_code: str = "en") -> str
         reranked = await _grade_items(query, reranked)
 
         passages = [text for text, _, _ in reranked]
-        encoded = [_encode_image_paths(text) for text in passages]
+        encoded = [_tag_passage(text, meta) for text, meta, _ in reranked]
 
         vision_analysis = await _run_vision_analysis(query, passages)
         if vision_analysis:
