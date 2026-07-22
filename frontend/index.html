@@ -153,6 +153,18 @@ function renderDebug(data) {
     }).join('') + '</ol>';
   }
 
+  const comp = m.completeness || [];
+  if (comp.length) {
+    html += '<h2 style="margin-top:.9rem">Completeness pass — per-passage enumeration</h2>';
+    html += '<ol class="dbg-trace">' + comp.map((c) => {
+      const badge = c.found
+        ? '<span style="color:#0a0">✓ found</span>'
+        : '<span class="dbg-empty">NONE</span>';
+      const body = c.found ? '<div class="dbg-result">' + esc(c.enumeration) + '</div>' : '';
+      return '<li><div class="dbg-tool">' + esc(c.source || '(passage)') + ' — ' + badge + '</div>' + body + '</li>';
+    }).join('') + '</ol>';
+  }
+
   html += '<details><summary>Raw response JSON</summary>'
     + '<pre class="raw">' + esc(JSON.stringify(data, null, 2)) + '</pre></details>';
 

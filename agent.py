@@ -72,47 +72,67 @@ async def _enumerate_passage(question: str, passage: str) -> str:
         return "NONE"
 
 
-async def _completeness_pass(question: str, draft: str, passages: list) -> tuple[str, int]:
+async def _completeness_pass(question: str, draft: str, passages: list) -> tuple[str, int, list]:
     """Fight under-enumeration: extract every matching entry from each passage
-    (focused, concurrent), then rewrite the draft to include them all.
+    (focused, concurrent), then rewrite the answer to include them all — EXPANDING
+    scope to types/pages the draft omitted, not just enriching what it covered.
 
-    Returns (answer, llm_call_count). Falls back to the draft on any failure."""
+    Returns (answer, llm_call_count, details). `details` is a per-passage record
+    (source tag + whether entries were found + the enumeration) for debugging.
+    Falls back to the draft on any failure."""
     seen, uniq = set(), []
     for p in passages:                       # same page can be retrieved twice
         if p not in seen:
             seen.add(p)
             uniq.append(p)
     if not uniq:
-        return draft, 0
+        return draft, 0, []
 
     enums = await asyncio.gather(*(_enumerate_passage(question, p) for p in uniq))
     calls = len(uniq)
-    findings = [e for e in enums if e and e.upper() != "NONE"]
+
+    details, findings = [], []
+    for p, e in zip(uniq, enums):
+        found = bool(e and e.upper() != "NONE")
+        details.append({
+            "source": p.splitlines()[0] if p.strip() else "",   # the [SOURCE: …] line
+            "found": found,
+            "enumeration": (e[:1000] if found else "NONE"),
+        })
+        if found:
+            findings.append(e)
+
     if not findings:
-        return draft, calls
+        return draft, calls, details
 
     messages = [{
         "role": "user",
         "content": (
             "Below is a DRAFT answer, then exhaustive entry lists extracted "
-            "individually from each source table. Rewrite the draft so that EVERY "
-            "entry from the extracted lists appears in the final answer. Preserve "
-            "the draft's language, structure, grouping, formatting and citations. "
-            "Do NOT drop, merge, or summarize away any extracted entry, and do NOT "
-            "invent entries absent from both the draft and the extracted lists.\n\n"
+            "individually from each source passage. Produce a COMPLETE final answer "
+            "containing EVERY entry in the extracted lists.\n"
+            "IMPORTANT: the draft may have OMITTED entire product types, series, or "
+            "pages that the extracted lists cover. Do NOT let the draft's narrower "
+            "scope limit the answer — add whatever types/pages the extractions "
+            "contain, as new groups if needed. Use the draft only for language, "
+            "tone, and formatting conventions. Group entries by their product "
+            "type / source, keep each entry's [Page N] citation, do NOT drop, "
+            "merge, or summarize away any extracted entry, and do NOT invent "
+            "entries absent from the extracted lists.\n\n"
             f"=== USER REQUEST ===\n{question}\n\n"
-            f"=== DRAFT ANSWER ===\n{draft}\n\n"
-            "=== EXHAUSTIVE EXTRACTED ENTRIES ===\n" + "\n\n".join(findings)
+            f"=== DRAFT ANSWER (style reference only) ===\n{draft}\n\n"
+            "=== EXHAUSTIVE EXTRACTED ENTRIES (the source of truth) ===\n"
+            + "\n\n".join(findings)
         ),
     }]
     try:
         merged = await asyncio.to_thread(
             inference.chat_content, messages, config.LANGUAGE_MODEL, config.CHAT_TIMEOUT
         )
-        return (merged or draft), calls + 1
+        return (merged or draft), calls + 1, details
     except Exception as e:
         print(f"Completeness reconciliation failed: {e}")
-        return draft, calls + 1
+        return draft, calls + 1, details
 
 
 async def run(system: str, user_msg: str, trace: list = None,
@@ -126,6 +146,7 @@ async def run(system: str, user_msg: str, trace: list = None,
     iterations = 0
     tool_calls_count = 0
     completeness_calls = 0
+    completeness_details: list = []   # per-passage enumeration outcome (debug)
     retrieved_passages: list = []   # individual source passages, for the completeness pass
 
     def _record(data: dict, t0: float):
@@ -145,6 +166,7 @@ async def run(system: str, user_msg: str, trace: list = None,
             "generations": generations,
             "llm_calls": len(generations),
             "completeness_calls": completeness_calls,
+            "completeness": completeness_details,
             "agent_iterations": iterations,
             "tool_calls": tool_calls_count,
             "prompt_tokens": p,
@@ -166,7 +188,7 @@ async def run(system: str, user_msg: str, trace: list = None,
             # Focused per-table enumeration pass to catch rows the broad answer
             # summarized away (see config.COMPLETENESS_PASS_ENABLED).
             if config.COMPLETENESS_PASS_ENABLED and retrieved_passages and answer.strip():
-                answer, ncalls = await _completeness_pass(
+                answer, ncalls, completeness_details = await _completeness_pass(
                     user_msg, answer, retrieved_passages
                 )
                 completeness_calls += ncalls

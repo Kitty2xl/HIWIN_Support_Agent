@@ -85,9 +85,11 @@ def _bool_env(key: str, default: str) -> bool:
 
 # --- Relevance grading (per-passage "does this help?" second pass) ---
 # After reranking, each surviving passage is graded YES/NO by the LLM and the
-# NOs are dropped. Costs one LLM call per passage (run concurrently); set
-# GRADING_ENABLED=false to skip the pass entirely.
-GRADING_ENABLED       = _bool_env("GRADING_ENABLED", "true")
+# NOs are dropped. Costs one LLM call per passage (run concurrently). Default
+# OFF: this is a PRECISION filter, which conflicts with the exhaustive-recall
+# design (it can drop relevant type-pages and starve the completeness pass).
+# Enable only if noisy retrieval is a bigger problem than missing results.
+GRADING_ENABLED       = _bool_env("GRADING_ENABLED", "false")
 GRADING_DOC_MAX_CHARS = int(_env("GRADING_DOC_MAX_CHARS", "2000"))
 GRADING_TIMEOUT       = int(_env("GRADING_TIMEOUT", "30"))
 
