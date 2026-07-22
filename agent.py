@@ -48,6 +48,13 @@ async def _enumerate_passage(question: str, passage: str, sem: asyncio.Semaphore
     one-table task doesn't get summarized down the way the broad synthesis does.
     Returns the raw enumeration, 'NONE' if nothing matched, or '__ERROR__: …' on
     failure. `sem` bounds how many of these run at once (see COMPLETENESS_CONCURRENCY)."""
+    none_instr = (
+        "If nothing in the passage matches the request, reply with 'NONE —' "
+        "followed by ONE short sentence stating what the passage actually contains "
+        "(e.g. which diameters / leads / types), so the decision can be audited."
+        if config.COMPLETENESS_EXPLAIN_NONE
+        else "If nothing in the passage matches the request, reply with exactly: NONE."
+    )
     messages = [{
         "role": "user",
         "content": (
@@ -56,8 +63,7 @@ async def _enumerate_passage(question: str, passage: str, sem: asyncio.Semaphore
             "satisfies the request. Be exhaustive: do not omit, merge, or collapse "
             "any matching row, including near-duplicates that differ only in a spec "
             "value. Keep each entry's identifying spec values. Cite each entry with "
-            "the page from the passage's [SOURCE: …] tag. If nothing in the passage "
-            "matches the request, reply with exactly: NONE.\n\n"
+            "the page from the passage's [SOURCE: …] tag. " + none_instr + "\n\n"
             f"User request:\n{question}\n\n"
             f"Source passage:\n{passage}"
         ),
@@ -98,7 +104,7 @@ async def _completeness_pass(question: str, draft: str, passages: list) -> tuple
     for p, e in zip(uniq, enums):
         if e.startswith("__ERROR__"):
             status = "error"
-        elif not e or e.strip().upper() == "NONE":
+        elif not e or e.strip().upper().startswith("NONE"):
             status = "none"
         else:
             status = "found"

@@ -109,6 +109,10 @@ COMPLETENESS_TIMEOUT      = int(_env("COMPLETENESS_TIMEOUT", "120"))
 # count (1 for a single-GPU llama.cpp with --parallel 1). Raise it if your server
 # can genuinely handle more at once; lowering trades latency for reliability.
 COMPLETENESS_CONCURRENCY  = int(_env("COMPLETENESS_CONCURRENCY", "1"))
+# Debugging aid: when a passage matches nothing, have the enumeration append a
+# one-line reason (what the passage actually contains) instead of a bare NONE,
+# so false negatives can be told apart from genuine no-matches in the trace.
+COMPLETENESS_EXPLAIN_NONE = _bool_env("COMPLETENESS_EXPLAIN_NONE", "true")
 
 
 # --- Chat logging ---
