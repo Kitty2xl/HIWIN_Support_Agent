@@ -42,11 +42,12 @@ async def _run_tool(name: str, args: dict):
     return (result if isinstance(result, str) else str(result)), []
 
 
-async def _enumerate_passage(question: str, passage: str) -> str:
+async def _enumerate_passage(question: str, passage: str, sem: asyncio.Semaphore) -> str:
     """Re-read ONE passage in isolation and exhaustively list every entry in it
     that matches the user's request. The narrow scope is the point: a focused
     one-table task doesn't get summarized down the way the broad synthesis does.
-    Returns 'NONE' when the passage has nothing matching (or on failure)."""
+    Returns the raw enumeration, 'NONE' if nothing matched, or '__ERROR__: …' on
+    failure. `sem` bounds how many of these run at once (see COMPLETENESS_CONCURRENCY)."""
     messages = [{
         "role": "user",
         "content": (
@@ -61,15 +62,16 @@ async def _enumerate_passage(question: str, passage: str) -> str:
             f"Source passage:\n{passage}"
         ),
     }]
-    try:
-        out = await asyncio.to_thread(
-            inference.chat_content, messages,
-            config.LANGUAGE_MODEL, config.COMPLETENESS_TIMEOUT,
-        )
-        return (out or "").strip()
-    except Exception as e:
-        print(f"Completeness enumeration failed: {e}")
-        return f"__ERROR__: {e}"
+    async with sem:
+        try:
+            out = await asyncio.to_thread(
+                inference.chat_content, messages,
+                config.LANGUAGE_MODEL, config.COMPLETENESS_TIMEOUT,
+            )
+            return (out or "").strip()
+        except Exception as e:
+            print(f"Completeness enumeration failed: {e}")
+            return f"__ERROR__: {e}"
 
 
 async def _completeness_pass(question: str, draft: str, passages: list) -> tuple[str, int, list]:
@@ -88,7 +90,8 @@ async def _completeness_pass(question: str, draft: str, passages: list) -> tuple
     if not uniq:
         return draft, 0, []
 
-    enums = await asyncio.gather(*(_enumerate_passage(question, p) for p in uniq))
+    sem = asyncio.Semaphore(max(1, config.COMPLETENESS_CONCURRENCY))
+    enums = await asyncio.gather(*(_enumerate_passage(question, p, sem) for p in uniq))
     calls = len(uniq)
 
     details, findings = [], []

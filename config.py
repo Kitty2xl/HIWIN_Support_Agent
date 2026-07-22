@@ -102,7 +102,13 @@ GRADING_TIMEOUT       = int(_env("GRADING_TIMEOUT", "30"))
 # assumptions). Costs one LLM call per unique passage + one to reconcile; set
 # COMPLETENESS_PASS_ENABLED=false if latency matters more than exhaustiveness.
 COMPLETENESS_PASS_ENABLED = _bool_env("COMPLETENESS_PASS_ENABLED", "true")
-COMPLETENESS_TIMEOUT      = int(_env("COMPLETENESS_TIMEOUT", "60"))
+COMPLETENESS_TIMEOUT      = int(_env("COMPLETENESS_TIMEOUT", "120"))
+# Max enumeration calls in flight at once. The local inference server processes
+# large requests roughly serially, so firing every passage concurrently makes
+# them queue past their timeout — keep this near the server's real parallel slot
+# count (1 for a single-GPU llama.cpp with --parallel 1). Raise it if your server
+# can genuinely handle more at once; lowering trades latency for reliability.
+COMPLETENESS_CONCURRENCY  = int(_env("COMPLETENESS_CONCURRENCY", "1"))
 
 
 # --- Chat logging ---
