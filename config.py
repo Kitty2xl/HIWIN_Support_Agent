@@ -92,6 +92,17 @@ GRADING_DOC_MAX_CHARS = int(_env("GRADING_DOC_MAX_CHARS", "2000"))
 GRADING_TIMEOUT       = int(_env("GRADING_TIMEOUT", "30"))
 
 
+# --- Completeness pass (focused per-table enumeration) ---
+# After the draft answer, each retrieved passage is re-read in ISOLATION to
+# extract every entry matching the user's request, then the draft is rewritten
+# to include them all. This fights the model's tendency to summarize long spec
+# tables down to a few representative rows. Format-agnostic (no column-schema
+# assumptions). Costs one LLM call per unique passage + one to reconcile; set
+# COMPLETENESS_PASS_ENABLED=false if latency matters more than exhaustiveness.
+COMPLETENESS_PASS_ENABLED = _bool_env("COMPLETENESS_PASS_ENABLED", "true")
+COMPLETENESS_TIMEOUT      = int(_env("COMPLETENESS_TIMEOUT", "60"))
+
+
 # --- Chat logging ---
 # Persist each /chat request (prompt, answer, sources, trace, timing & token
 # metrics) to a table. Stored in a SEPARATE schema in the same database, so it's

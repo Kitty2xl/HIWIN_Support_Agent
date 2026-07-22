@@ -132,6 +132,7 @@ function renderDebug(data) {
     + kv('iterations', m.agent_iterations)
     + kv('tool calls', m.tool_calls)
     + kv('llm calls', m.llm_calls)
+    + kv('completeness calls', m.completeness_calls)
     + kv('tokens (p+c=t)', (m.prompt_tokens || 0) + '+' + (m.completion_tokens || 0) + '=' + (m.total_tokens || 0))
     + kv('latency', (m.latency_ms != null ? m.latency_ms + ' ms' : '—'))
     + '</div>';

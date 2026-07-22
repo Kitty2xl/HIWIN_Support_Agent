@@ -42,6 +42,79 @@ async def _run_tool(name: str, args: dict):
     return (result if isinstance(result, str) else str(result)), []
 
 
+async def _enumerate_passage(question: str, passage: str) -> str:
+    """Re-read ONE passage in isolation and exhaustively list every entry in it
+    that matches the user's request. The narrow scope is the point: a focused
+    one-table task doesn't get summarized down the way the broad synthesis does.
+    Returns 'NONE' when the passage has nothing matching (or on failure)."""
+    messages = [{
+        "role": "user",
+        "content": (
+            "A user made the request below. From the SINGLE source passage that "
+            "follows, list EVERY entry (e.g. every model / part-number row) that "
+            "satisfies the request. Be exhaustive: do not omit, merge, or collapse "
+            "any matching row, including near-duplicates that differ only in a spec "
+            "value. Keep each entry's identifying spec values. Cite each entry with "
+            "the page from the passage's [SOURCE: …] tag. If nothing in the passage "
+            "matches the request, reply with exactly: NONE.\n\n"
+            f"User request:\n{question}\n\n"
+            f"Source passage:\n{passage}"
+        ),
+    }]
+    try:
+        out = await asyncio.to_thread(
+            inference.chat_content, messages,
+            config.LANGUAGE_MODEL, config.COMPLETENESS_TIMEOUT,
+        )
+        return (out or "NONE").strip()
+    except Exception as e:
+        print(f"Completeness enumeration failed: {e}")
+        return "NONE"
+
+
+async def _completeness_pass(question: str, draft: str, passages: list) -> tuple[str, int]:
+    """Fight under-enumeration: extract every matching entry from each passage
+    (focused, concurrent), then rewrite the draft to include them all.
+
+    Returns (answer, llm_call_count). Falls back to the draft on any failure."""
+    seen, uniq = set(), []
+    for p in passages:                       # same page can be retrieved twice
+        if p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    if not uniq:
+        return draft, 0
+
+    enums = await asyncio.gather(*(_enumerate_passage(question, p) for p in uniq))
+    calls = len(uniq)
+    findings = [e for e in enums if e and e.upper() != "NONE"]
+    if not findings:
+        return draft, calls
+
+    messages = [{
+        "role": "user",
+        "content": (
+            "Below is a DRAFT answer, then exhaustive entry lists extracted "
+            "individually from each source table. Rewrite the draft so that EVERY "
+            "entry from the extracted lists appears in the final answer. Preserve "
+            "the draft's language, structure, grouping, formatting and citations. "
+            "Do NOT drop, merge, or summarize away any extracted entry, and do NOT "
+            "invent entries absent from both the draft and the extracted lists.\n\n"
+            f"=== USER REQUEST ===\n{question}\n\n"
+            f"=== DRAFT ANSWER ===\n{draft}\n\n"
+            "=== EXHAUSTIVE EXTRACTED ENTRIES ===\n" + "\n\n".join(findings)
+        ),
+    }]
+    try:
+        merged = await asyncio.to_thread(
+            inference.chat_content, messages, config.LANGUAGE_MODEL, config.CHAT_TIMEOUT
+        )
+        return (merged or draft), calls + 1
+    except Exception as e:
+        print(f"Completeness reconciliation failed: {e}")
+        return draft, calls + 1
+
+
 async def run(system: str, user_msg: str, trace: list = None,
               sources: list = None, metrics: dict = None) -> str:
     messages = [
@@ -52,6 +125,8 @@ async def run(system: str, user_msg: str, trace: list = None,
     generations: list = []   # one entry per LLM generation call (timing + tokens)
     iterations = 0
     tool_calls_count = 0
+    completeness_calls = 0
+    retrieved_passages: list = []   # individual source passages, for the completeness pass
 
     def _record(data: dict, t0: float):
         usage = data.get("usage") or {}
@@ -69,6 +144,7 @@ async def run(system: str, user_msg: str, trace: list = None,
         metrics.update({
             "generations": generations,
             "llm_calls": len(generations),
+            "completeness_calls": completeness_calls,
             "agent_iterations": iterations,
             "tool_calls": tool_calls_count,
             "prompt_tokens": p,
@@ -86,8 +162,16 @@ async def run(system: str, user_msg: str, trace: list = None,
 
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
+            answer = msg.get("content") or ""
+            # Focused per-table enumeration pass to catch rows the broad answer
+            # summarized away (see config.COMPLETENESS_PASS_ENABLED).
+            if config.COMPLETENESS_PASS_ENABLED and retrieved_passages and answer.strip():
+                answer, ncalls = await _completeness_pass(
+                    user_msg, answer, retrieved_passages
+                )
+                completeness_calls += ncalls
             _finalize()
-            return msg.get("content") or ""
+            return answer
 
         for tc in tool_calls:
             tool_calls_count += 1
@@ -97,6 +181,13 @@ async def run(system: str, user_msg: str, trace: list = None,
             except Exception:
                 args = {}
             text, srcs = await _run_tool(name, args)
+
+            # Keep the individual source passages (retrieval tools return srcs)
+            # for the post-answer completeness pass.
+            if srcs:
+                retrieved_passages.extend(
+                    p for p in text.split("\n---\n") if p.strip().startswith("[SOURCE:")
+                )
 
             # Accumulate citations across all tool calls, de-duplicated on
             # identity EXCLUDING rerank_score (the same chunk can come back from
