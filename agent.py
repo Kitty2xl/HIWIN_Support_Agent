@@ -115,10 +115,11 @@ async def run(system: str, user_msg: str, trace: list = None,
                         match["rerank_score"] = s["rerank_score"]
 
             if trace is not None:
+                cap = config.TRACE_RESULT_MAX_CHARS
                 preview = (
                     text
-                    if len(text) <= 600
-                    else text[:600] + f"... [truncated, {len(text)} chars total]"
+                    if (cap <= 0 or len(text) <= cap)
+                    else text[:cap] + f"... [truncated, {len(text)} chars total]"
                 )
                 trace.append({"tool": name, "args": args, "result": preview})
             messages.append(

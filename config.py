@@ -73,6 +73,10 @@ VISION_MAX_IMAGES = int(_env("VISION_MAX_IMAGES", "4"))
 # --- Agent / routing ---
 MAX_AGENT_ITERS = int(_env("MAX_AGENT_ITERS", "8"))
 DEFAULT_LANGUAGE = _env("DEFAULT_LANGUAGE", "tc")  # per System_prompt STATE 0
+# Max chars of each tool result kept in the trace (debug panel + chat log).
+# 0 = no truncation. Raise this to inspect full retrieved passages when
+# debugging recall; keep it modest in production to bound chat-log row size.
+TRACE_RESULT_MAX_CHARS = int(_env("TRACE_RESULT_MAX_CHARS", "600"))
 
 
 def _bool_env(key: str, default: str) -> bool:
