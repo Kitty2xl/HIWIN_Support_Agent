@@ -38,6 +38,37 @@ def _encode_image_paths(text: str) -> str:
     return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", encode_match, text)
 
 
+def _condense_figures(text: str) -> str:
+    """Shrink verbose auto-generated figure text before a passage goes to the LLM.
+
+    Ingested markdown carries a long vision-generated description in BOTH the image
+    alt-text and a duplicate italic caption; that's a large, low-value chunk of
+    every passage. Keep the image link (so answers can still show the figure) and a
+    short label, drop the bulk. Spec tables are untouched, and the live vision pass
+    still analyses the actual images separately. -1 leaves the text as-is."""
+    budget = config.FIGURE_TEXT_MAX_CHARS
+    if budget < 0:
+        return text
+
+    def _clip(s: str) -> str:
+        s = s.strip()
+        return s if len(s) <= budget else s[:budget].rstrip() + "…"
+
+    # Shorten the alt-text inside image markdown, but keep the path intact.
+    text = re.sub(
+        r"!\[([^\]]*)\]\(([^)]+)\)",
+        lambda m: f"![{_clip(m.group(1))}]({m.group(2)})",
+        text,
+    )
+    # Shorten standalone italic caption lines (a whole line wrapped in *...*).
+    text = re.sub(
+        r"(?m)^\*([^*\n]+)\*\s*$",
+        lambda m: f"*{_clip(m.group(1))}*",
+        text,
+    )
+    return text
+
+
 def _extract_image_static_paths(passages: list) -> list:
     """Return unique /static/HIWIN/... paths found across all passages, in order."""
     seen = set()
@@ -158,8 +189,10 @@ def _source_tag(meta) -> str:
 
 
 def _tag_passage(text: str, meta) -> str:
-    """Prepend the source tag (if any) to an image-path-encoded passage."""
-    body = _encode_image_paths(text)
+    """Prepend the source tag (if any) to an image-path-encoded, figure-condensed
+    passage. Condensing only affects what the model reads — the raw passages used
+    for vision analysis are untouched."""
+    body = _condense_figures(_encode_image_paths(text))
     tag = _source_tag(meta)
     return f"{tag}\n{body}" if tag else body
 

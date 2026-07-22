@@ -23,6 +23,22 @@ def _assistant_msg(msg: dict) -> dict:
     return out
 
 
+def _trim_tool_history(messages: list, keep_recent: int) -> None:
+    """Stub out the content of older tool results in-place so a multi-search
+    conversation doesn't accumulate every passage in context. The most recent
+    `keep_recent` tool results are left intact; the rest become a short marker.
+    The full passages are still handled by the completeness pass, so the final
+    answer loses nothing. keep_recent < 0 disables trimming."""
+    if keep_recent < 0:
+        return
+    tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    to_trim = tool_idxs if keep_recent == 0 else tool_idxs[:-keep_recent]
+    for i in to_trim:
+        content = messages[i].get("content") or ""
+        if not content.startswith("[trimmed"):
+            messages[i]["content"] = f"[trimmed earlier result — {len(content)} chars]"
+
+
 async def _run_tool(name: str, args: dict):
     """Run a tool and return (text_for_llm, sources_list).
 
@@ -196,6 +212,7 @@ async def run(system: str, user_msg: str, trace: list = None,
 
     for _ in range(config.MAX_AGENT_ITERS):
         iterations += 1
+        _trim_tool_history(messages, config.KEEP_RECENT_TOOL_RESULTS)
         t0 = time.perf_counter()
         data = await asyncio.to_thread(inference.chat, messages, TOOL_SCHEMAS)
         _record(data, t0)
@@ -260,6 +277,7 @@ async def run(system: str, user_msg: str, trace: list = None,
             )
 
     # Iteration cap hit — force a final answer with tools disabled.
+    _trim_tool_history(messages, config.KEEP_RECENT_TOOL_RESULTS)
     t0 = time.perf_counter()
     data = await asyncio.to_thread(inference.chat, messages)
     _record(data, t0)

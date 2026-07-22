@@ -46,8 +46,20 @@ CHAT_TIMEOUT = int(_env("CHAT_TIMEOUT", "120"))
 # raise RERANK_CANDIDATE_K to match so the reranker has enough to choose from.
 VECTOR_TOP_K       = int(_env("VECTOR_TOP_K", "15"))       # per-table SQL LIMIT
 RERANK_CANDIDATE_K = int(_env("RERANK_CANDIDATE_K", "20"))  # passages fed to reranker
-RERANK_TOP_K       = int(_env("RERANK_TOP_K", "10"))       # passages kept (manuals)
+RERANK_TOP_K       = int(_env("RERANK_TOP_K", "6"))        # passages kept (manuals)
 CERT_RERANK_TOP_K  = int(_env("CERT_RERANK_TOP_K", "10"))  # passages kept (certifications)
+
+# --- Context control (keep the running conversation from overflowing n_ctx) ---
+# Verbose auto-generated figure descriptions are truncated to this many chars
+# before a passage is sent to the model — they duplicate across image alt-text +
+# caption and dominate passage size, while the spec tables (the real data) are
+# untouched. -1 disables; 0 leaves only a short placeholder.
+FIGURE_TEXT_MAX_CHARS = int(_env("FIGURE_TEXT_MAX_CHARS", "120"))
+# Keep only the most recent N tool results in full in the running conversation;
+# older ones are stubbed so many-search queries don't pile every passage into
+# context. The full passages are still handled by the completeness pass, so the
+# final answer loses nothing. -1 disables trimming; 0 stubs all prior results.
+KEEP_RECENT_TOOL_RESULTS = int(_env("KEEP_RECENT_TOOL_RESULTS", "4"))
 # Deterministic decoding for the chat/vision model — minimizes numeric drift
 # when the model transcribes values out of dense spec tables.
 TEMPERATURE = float(_env("TEMPERATURE", "0"))
