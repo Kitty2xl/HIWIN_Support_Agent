@@ -157,10 +157,10 @@ function renderDebug(data) {
   if (comp.length) {
     html += '<h2 style="margin-top:.9rem">Completeness pass — per-passage enumeration</h2>';
     html += '<ol class="dbg-trace">' + comp.map((c) => {
-      const badge = c.found
-        ? '<span style="color:#0a0">✓ found</span>'
+      const badge = c.status === 'found' ? '<span style="color:#0a0">✓ found</span>'
+        : c.status === 'error' ? '<span class="dbg-empty">⚠ error</span>'
         : '<span class="dbg-empty">NONE</span>';
-      const body = c.found ? '<div class="dbg-result">' + esc(c.enumeration) + '</div>' : '';
+      const body = c.output ? '<div class="dbg-result">' + esc(c.output) + '</div>' : '';
       return '<li><div class="dbg-tool">' + esc(c.source || '(passage)') + ' — ' + badge + '</div>' + body + '</li>';
     }).join('') + '</ol>';
   }

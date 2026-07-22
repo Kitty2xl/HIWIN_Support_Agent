@@ -66,10 +66,10 @@ async def _enumerate_passage(question: str, passage: str) -> str:
             inference.chat_content, messages,
             config.LANGUAGE_MODEL, config.COMPLETENESS_TIMEOUT,
         )
-        return (out or "NONE").strip()
+        return (out or "").strip()
     except Exception as e:
         print(f"Completeness enumeration failed: {e}")
-        return "NONE"
+        return f"__ERROR__: {e}"
 
 
 async def _completeness_pass(question: str, draft: str, passages: list) -> tuple[str, int, list]:
@@ -93,13 +93,18 @@ async def _completeness_pass(question: str, draft: str, passages: list) -> tuple
 
     details, findings = [], []
     for p, e in zip(uniq, enums):
-        found = bool(e and e.upper() != "NONE")
+        if e.startswith("__ERROR__"):
+            status = "error"
+        elif not e or e.strip().upper() == "NONE":
+            status = "none"
+        else:
+            status = "found"
         details.append({
             "source": p.splitlines()[0] if p.strip() else "",   # the [SOURCE: …] line
-            "found": found,
-            "enumeration": (e[:1000] if found else "NONE"),
+            "status": status,
+            "output": e[:1000],   # raw enumeration output (or error / NONE), for debugging
         })
-        if found:
+        if status == "found":
             findings.append(e)
 
     if not findings:
