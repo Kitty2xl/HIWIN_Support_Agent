@@ -51,7 +51,6 @@ Python client [PostgreSQL License], pydantic [MIT], tiktoken [MIT], starlette
 | PostgreSQL | PostgreSQL License (permissive, BSD-style) |
 | pgvector (Postgres extension) | PostgreSQL License |
 | llama.cpp (`llama-server`) | MIT |
-| llama-swap | MIT |
 
 ## Model weights (provided / downloaded separately — verify on each model's page)
 

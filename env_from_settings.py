@@ -22,9 +22,9 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS = os.path.join(BASE, "pipeline", "settings.json")
 ENV = os.path.join(BASE, ".env")
 
-# Backend model aliases (llama-swap keys). These are the SERVING models and are
-# not stored in settings.json (which holds the pipeline's pass models), so keep
-# them here. Edit if your llama-swap uses different names.
+# Backend serving-model names (the router aliases the backend requests). These
+# are not stored in settings.json (which holds the pipeline's pass models), so
+# keep them here. Edit if your router preset uses different names.
 LANGUAGE_MODEL = "Support_Agent_Qwen3.6"
 EMBEDDING_MODEL = "Embedding_Qwen3.6"
 RERANKER_MODEL = "Reranker_Qwen3.6"
@@ -37,8 +37,8 @@ def main():
     with open(SETTINGS, "r", encoding="utf-8") as f:
         s = json.load(f)
 
-    # INFERENCE_HOST = the llama-swap base URL without a trailing /v1
-    base = (s.get("LLM_BASE_URL") or s.get("LLAMA_SWAP_URL") or "http://localhost:11400")
+    # INFERENCE_HOST = the router base URL without a trailing /v1
+    base = (s.get("LLM_BASE_URL") or "http://localhost:11400")
     host = base.rstrip("/")
     if host.endswith("/v1"):
         host = host[:-3].rstrip("/")
@@ -47,7 +47,7 @@ def main():
 # Backend config, generated from pipeline/settings.json by env_from_settings.py.
 # Re-run that script whenever you change the shared DB / image / server values.
 
-# --- Inference server (llama-swap proxy port) ---
+# --- Inference server (llama.cpp router, OpenAI-compatible endpoint) ---
 INFERENCE_HOST={host}
 LANGUAGE_MODEL={LANGUAGE_MODEL}
 EMBEDDING_MODEL={EMBEDDING_MODEL}

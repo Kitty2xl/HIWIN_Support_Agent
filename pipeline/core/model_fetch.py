@@ -1,6 +1,6 @@
 """
 model_fetch.py — optional helper to provision local GGUF model files from
-Hugging Face for your inference server (llama.cpp / llama-swap).
+Hugging Face for your inference server (llama.cpp router mode).
 
 The pipeline and backend never load GGUFs themselves — they call the inference
 server over HTTP. This helper is a convenience for populating that server's model
@@ -8,7 +8,7 @@ folder: it checks whether the GGUF files you need are present and, with the
 user's permission, downloads the missing ones from Hugging Face.
 
 It is driven by a manifest (models.json, committed and pre-filled) because the
-model names in config.py are your own llama-swap aliases, not Hugging Face repo
+model names in config.py are your own router preset names, not Hugging Face repo
 IDs. Edit models.json to set model_dir and each repo_id:
 
     {

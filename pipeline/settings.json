@@ -3,17 +3,10 @@
   "ROOT_PATH": "/path/to/HIWIN",
   "IMAGE_TARGET_ROOT": "/path/to/open_webui/static/HIWIN",
   "LLM_BASE_URL": "http://localhost:11400/v1",
-  "LLAMA_SWAP_URL": "http://127.0.0.1:11400",
   "LLM_API_KEY": "sk-no-key-required",
   "LLM_TIMEOUT": 60000,
   "LLM_PREHEAT_TIMEOUT": 120,
   "LLM_MAX_RETRIES": 3,
-  "PASS34_NODE_URLS": [
-    "http://localhost:11400/v1"
-  ],
-  "PASS34_NODE_SWAP_URLS": [
-    "http://127.0.0.1:11400"
-  ],
   "MODEL_PASS_2": "RAG_Pipeline_Pass34",
   "MODEL_PASS_2B": "RAG_Pipeline_Pass34",
   "MODEL_PASS_3": "RAG_Pipeline_Pass34",

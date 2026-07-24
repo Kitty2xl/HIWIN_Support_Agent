@@ -66,7 +66,7 @@ async def _transcribe_page(pool, image_path, output_path, prompt, model_name,
             except Exception as e:
                 last_exc = e
                 if attempt < max_retries - 1:
-                    # llama-swap returns transient errors while swapping models in/out
+                    # the router can return transient errors while a model loads
                     # (e.g. "process was already starting", "upstream command exited").
                     # A short exponential backoff is enough for the model to finish
                     # loading before the next attempt.

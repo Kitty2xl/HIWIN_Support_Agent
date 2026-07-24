@@ -17,28 +17,15 @@ MODEL_PATH_PASS_1 = os.path.join(ROOT_PATH, 'PP-DocLayout-PlusL.onnx')
 IMAGE_TARGET_ROOT = os.path.join(ROOT_PATH, 'web_static')
 
 # =====================================================================
-# LLM SERVER — local  (Pass 3b / 4 — RAG_Pipeline_Pass5Ingest)
+# LLM SERVER — the local llama.cpp router (one OpenAI-compatible endpoint
+# serving every model; requests route by model name). Passes 2/2b/3 and
+# 3b/4 all hit this one URL.
 # =====================================================================
-LLAMA_SWAP_URL      = "http://127.0.0.1:11400"
 LLM_BASE_URL        = "http://localhost:11400/v1"
 LLM_API_KEY         = "sk-no-key-required"
 LLM_TIMEOUT         = 60000    # ms — async passes 2/2b/3
 LLM_PREHEAT_TIMEOUT = 120      # seconds — preheat + Pass 4 sync client
 LLM_MAX_RETRIES     = 3
-
-# =====================================================================
-# PASS34 INFERENCE NODES  (Passes 2 / 2b / 3 — RAG_Pipeline_Pass34)
-# Add or remove entries to scale horizontally across machines.
-# Each entry is one llama-swap instance serving RAG_Pipeline_Pass34.
-# =====================================================================
-PASS34_NODE_URLS = [
-    "http://localhost:11400/v1",         # local GPU
-    "http://100.68.247.41:8080/v1",     # remote GPU
-]
-PASS34_NODE_SWAP_URLS = [
-    "http://127.0.0.1:11400",            # local llama-swap
-    "http://100.68.247.41:8080",        # remote llama-swap
-]
 
 # =====================================================================
 # MODELS

@@ -33,7 +33,7 @@ import requests
 
 # ---- SETTINGS (edit these to run straight from your IDE) --------------------
 CHAT_URL   = os.environ.get("CHAT_URL", "http://localhost:8079/chat")
-TIMEOUT    = int(os.environ.get("CHAT_TIMEOUT", "300"))  # cold model swaps can be slow
+TIMEOUT    = int(os.environ.get("CHAT_TIMEOUT", "300"))  # cold model loads can be slow
 FILES      = []          # request files to send; [] = every examples/*.json
 OUTPUT_DIR = "."         # where results_<timestamp>.md / .json are written
 # -----------------------------------------------------------------------------
@@ -110,6 +110,15 @@ def main(argv=None):
 
             tools = [t.get("tool") for t in data.get("trace", [])]
             out.write(f"**Tools called:** {', '.join(tools) if tools else '(none)'}\n\n")
+
+            m = data.get("metrics", {})
+            if m:
+                out.write(
+                    f"**Metrics:** completeness_calls={m.get('completeness_calls')} · "
+                    f"llm_calls={m.get('llm_calls')} · tool_calls={m.get('tool_calls')} · "
+                    f"tokens={m.get('total_tokens')} · latency={m.get('latency_ms')} ms\n\n"
+                )
+
             out.write(f"**Response:**\n\n{data.get('response', '')}\n\n")
 
             srcs = data.get("sources", [])

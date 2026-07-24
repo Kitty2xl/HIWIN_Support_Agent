@@ -88,7 +88,8 @@ async def _enumerate_passage(question: str, passage: str, sem: asyncio.Semaphore
         try:
             out = await asyncio.to_thread(
                 inference.chat_content, messages,
-                config.LANGUAGE_MODEL, config.COMPLETENESS_TIMEOUT,
+                config.COMPLETENESS_MODEL, config.COMPLETENESS_TIMEOUT,
+                config.COMPLETENESS_BASE_URL,
             )
             return (out or "").strip()
         except Exception as e:

@@ -25,7 +25,8 @@ def _env(key: str, default: str) -> str:
     return os.environ.get(key, default)
 
 
-# --- Inference server (llama.cpp, OpenAI-compatible) ---
+# --- Inference server (llama.cpp router mode, OpenAI-compatible) ---
+# One endpoint serves every model; requests route by the model name below.
 # Default assumes the backend runs ON the model/DB server, so localhost works.
 # To run from a remote dev machine, set INFERENCE_HOST=http://<server-ip>:11400
 INFERENCE_HOST = _env("INFERENCE_HOST", "http://localhost:11400")
@@ -125,6 +126,14 @@ COMPLETENESS_CONCURRENCY  = int(_env("COMPLETENESS_CONCURRENCY", "1"))
 # one-line reason (what the passage actually contains) instead of a bare NONE,
 # so false negatives can be told apart from genuine no-matches in the trace.
 COMPLETENESS_EXPLAIN_NONE = _bool_env("COMPLETENESS_EXPLAIN_NONE", "true")
+# The per-passage enumeration is a narrow, mechanical task, so it can run on a
+# SMALLER, faster model than LANGUAGE_MODEL. With the router keeping both models
+# resident behind one endpoint, point this at the small model (e.g.
+# Support_Agent_Aux) — then COMPLETENESS_CONCURRENCY can safely go above 1.
+# Reconciliation stays on LANGUAGE_MODEL. COMPLETENESS_BASE_URL only needs setting
+# if you serve the small model at a different endpoint; it defaults to the main one.
+COMPLETENESS_MODEL    = _env("COMPLETENESS_MODEL", LANGUAGE_MODEL)
+COMPLETENESS_BASE_URL = _env("COMPLETENESS_BASE_URL", INFERENCE_BASE_URL)
 
 
 # --- Chat logging ---

@@ -16,7 +16,7 @@ from llama_index.embeddings.openai_like import OpenAILikeEmbedding
 
 from core.config import (
     ROOT_PATH, FINAL_OUTPUT_ROOT, IMAGE_TARGET_ROOT, PROCESS_ROOT,
-    LLM_BASE_URL,
+    LLM_BASE_URL, LLM_API_KEY,
     DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT, EMBED_DIM, DB_SCHEMA,
     EMBED_BATCH_SIZE, INGEST_BY_PAGE,
 )
@@ -258,7 +258,7 @@ def run_ingestion_stage(checkpoint_manager=None, doc_checkpoint_map=None,
     # DB table, or pgvector inserts will fail (dimension mismatch).
     embed_model = OpenAILikeEmbedding(
         api_base=LLM_BASE_URL,
-        api_key="llama-swap",
+        api_key=LLM_API_KEY,
         model_name="Embedding_Qwen3.6",
         timeout=120000,
         embed_batch_size=EMBED_BATCH_SIZE,

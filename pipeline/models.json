@@ -1,5 +1,5 @@
 {
-  "_comment": "PLACEHOLDER — model_dir below is a '/path/to/...' dummy value and is NOT real; you MUST change it to the folder llama.cpp/llama-swap loads GGUFs from (must match the '-m' paths in your llama-swap config). repo_id values are also placeholders — fill them only if you want the in-app downloader (the Hugging Face repo hosting each .gguf); leave them if the files already exist in model_dir. filenames are taken from the llama-swap config. Test models and GLM5.2 were left out on purpose.",
+  "_comment": "PLACEHOLDER — model_dir below is a '/path/to/...' dummy value and is NOT real; you MUST change it to the folder llama.cpp loads GGUFs from (must match the model paths in your router preset, router.example.ini). repo_id values are also placeholders — fill them only if you want the in-app downloader (the Hugging Face repo hosting each .gguf); leave them if the files already exist in model_dir. filenames are taken from the router preset. Test models and GLM5.2 were left out on purpose.",
   "model_dir": "/path/to/llama/models",
   "hf_token": "",
   "models": [

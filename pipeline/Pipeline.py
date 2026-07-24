@@ -3,7 +3,6 @@ import re
 import asyncio
 import shutil
 import yaml
-import httpx
 import threading
 import json
 import logging
@@ -20,34 +19,17 @@ from core.fs_utils import to_long_path
 from core.config import (
     MODEL_PATH_PASS_1, SCORE_THRESHOLD,
     MODEL_PASS_2, MODEL_PASS_2B, MODEL_PASS_3, MODEL_PASS_3B, MODEL_PASS_4,
-    LLAMA_SWAP_URL, PASS34_NODE_SWAP_URLS,
     BATCH_SIZE_PASS_1, ORT_INTRA_THREADS, PASS_1_RENDER_DPI,
-    LLM_BASE_URL, PASS34_NODE_URLS, LLM_API_KEY, LLM_TIMEOUT, LLM_PREHEAT_TIMEOUT,
+    LLM_BASE_URL, LLM_API_KEY, LLM_TIMEOUT, LLM_PREHEAT_TIMEOUT,
     ROOT_PATH, PDF_CONFIG_PATH, PROCESS_ROOT, FINAL_OUTPUT_ROOT,
     CONCURRENCY, CONCURRENCY_PASS_4, TIMEOUT_RETRY_ENABLED, MAX_PDF_WORKERS,
     DEFAULT_LANGUAGE,
 )
 
 # Fallback lock used only in CLI mode (no shared pool).  When run_pipeline is
-# called normally a single shared NodePool replaces this, spreading every
-# page/figure/table request across all Pass34 nodes (page-level work-stealing).
+# called normally a single shared NodePool replaces this, gating page/figure/
+# table requests to the local inference server at CONCURRENCY.
 _gpu_lock = threading.Lock()
-
-
-def unload_model(model_name, swap_url=LLAMA_SWAP_URL):
-    """Unload a model from VRAM via the llama-swap API."""
-    try:
-        response = httpx.post(
-            f"{swap_url}/api/models/unload/{model_name}", timeout=100000.0
-        )
-        if response.status_code == 200:
-            print(f"  Unloaded: {model_name}")
-        else:
-            print(f"  Failed to unload {model_name} (HTTP {response.status_code})")
-        return response
-    except httpx.RequestError as e:
-        print(f"  Error unloading {model_name}: {e}")
-        return None
 
 
 def _parse_page_spec(spec):
@@ -163,9 +145,8 @@ class _PersistentAsyncRunner:
     live for the lifetime of an entire pipeline phase.
 
     Worker threads call .run(coro) to execute coroutines on that loop without
-    ever creating or closing their own event loop or client — so llama-swap
-    sees one continuous connection and never idles long enough to unload the
-    model between documents.
+    ever creating or closing their own event loop or client — so the inference
+    server sees one continuous connection for the whole phase.
 
     Usage:
         runner = _PersistentAsyncRunner(base_url, api_key, timeout)
@@ -207,38 +188,31 @@ class _PersistentAsyncRunner:
         self._thread.join(timeout=5)
 
 
-class _MultiNodePool:
+class _InferencePool:
     """
-    A persistent background event loop that owns one AsyncOpenAI client per
-    Pass34 node plus a shared NodePool spread across all of them.
+    A persistent background event loop that owns one AsyncOpenAI client to the
+    local inference server plus a shared NodePool wrapping it.
 
     Worker threads submit a PDF's Pass 2/2b/3 coroutine via .run(); inside it
-    every page, figure and table request draws from the shared NodePool, so a
-    single PDF fans its work out across all nodes and multiple in-flight PDFs
-    share the same pool.  Replaces the older one-node-per-PDF queue, which
-    pinned a whole PDF to a single node.
-
-    Total simultaneous Pass34 requests = node_count * concurrency.
+    every page, figure and table request draws a slot from the shared NodePool,
+    so all in-flight PDFs share one pool and total simultaneous Pass 2/2b/3
+    requests are capped at `concurrency`.
     """
 
-    def __init__(self, base_urls, api_key, timeout, concurrency):
+    def __init__(self, base_url, api_key, timeout, concurrency):
         from openai import AsyncOpenAI
         from core.node_pool import NodePool
 
-        self.node_count = len(base_urls)
         self._loop   = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
         self._thread.start()
 
-        # Build the clients and pool inside the loop so they are bound to it.
+        # Build the client and pool inside the loop so they are bound to it.
         async def _mk():
-            clients = [
-                AsyncOpenAI(base_url=url, api_key=api_key, timeout=timeout)
-                for url in base_urls
-            ]
-            return clients, NodePool(clients, concurrency, labels=base_urls)
+            client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
+            return client, NodePool([client], concurrency, labels=[base_url])
 
-        self._clients, self.pool = asyncio.run_coroutine_threadsafe(
+        self._client, self.pool = asyncio.run_coroutine_threadsafe(
             _mk(), self._loop
         ).result()
 
@@ -247,10 +221,9 @@ class _MultiNodePool:
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
     def close(self):
-        """Close every node client and stop the event loop."""
+        """Close the client and stop the event loop."""
         async def _shutdown():
-            for client in self._clients:
-                await client.close()
+            await self._client.close()
 
         asyncio.run_coroutine_threadsafe(_shutdown(), self._loop).result()
         self._loop.call_soon_threadsafe(self._loop.stop)
@@ -273,10 +246,10 @@ async def _combined_pass_2_2b_3(
     Pass 2b — caption each cropped figure, inject into Pass 2 Markdown
     Pass 3  — table image → Markdown table, inject into Pass 2b Markdown
 
-    If *pool* is provided the caller owns the underlying clients' lifecycle and
+    If *pool* is provided the caller owns the underlying client's lifecycle and
     nothing is closed here — this is the normal path when called via
-    _MultiNodePool, which spreads every page/figure/table request across all
-    Pass34 nodes so a single PDF fans out over every GPU.
+    _InferencePool, whose shared NodePool caps concurrent page/figure/table
+    requests to the local inference server.
     """
     from openai import AsyncOpenAI
     from core.node_pool import NodePool
@@ -294,7 +267,7 @@ async def _combined_pass_2_2b_3(
     client = None
     if _owns_pool:
         client = AsyncOpenAI(
-            base_url=PASS34_NODE_URLS[0],   # CLI fallback: single local node
+            base_url=LLM_BASE_URL,   # CLI fallback: the local inference server
             api_key=LLM_API_KEY,
             timeout=LLM_TIMEOUT,
         )
@@ -401,10 +374,10 @@ def _run_passes_1_to_3(task, checkpoint_manager, process_root, concurrency, pdf_
     Phase A — Passes 1, 2, 2b, 3 for a single PDF.
 
     Called concurrently across all PDFs.  Pass 1 is CPU-only and runs freely.
-    For Passes 2/2b/3 the thread submits the work to the shared _MultiNodePool's
+    For Passes 2/2b/3 the thread submits the work to the shared _InferencePool's
     event loop and blocks until it finishes; inside, every page/figure/table
-    request is spread across all Pass34 nodes via the shared NodePool, so a
-    single PDF fans out over every GPU and multiple PDFs share the same pool.
+    request draws a slot from the shared NodePool, so all in-flight PDFs share
+    one pool capped at CONCURRENCY.
 
     Phase B (Pass 3b/4) is submitted to its own runner as soon as this returns,
     overlapping with other PDFs still in Phase A.
@@ -472,9 +445,9 @@ def _run_passes_1_to_3(task, checkpoint_manager, process_root, concurrency, pdf_
         )
 
     if phase_a is not None:
-        # Spread this PDF's pages across every node via the shared pool.
+        # Run this PDF's pages via the shared inference pool.
         if not callback:
-            print(f"  [{label}] Pass 2/2b/3 → (running across {phase_a.node_count} node(s))")
+            print(f"  [{label}] Pass 2/2b/3 → (running on the inference server)")
         phase_a.run(_make_coro(phase_a.pool))
     else:
         # CLI fallback: no shared pool — build a single-node pool inside the coro.
@@ -603,12 +576,9 @@ async def _run_pass_4_coro(task, checkpoint_manager, process_root,
 
 def _preheat_model(model_name: str, emit_fn=None, base_url=LLM_BASE_URL):
     """
-    Send a minimal request to llama-swap so it loads *model_name* into VRAM
-    before real processing begins.  Called once per phase so every document
-    in that phase skips the cold-load penalty entirely.
-
-    Pass base_url=PASS34_NODE_URLS[n] for a specific Pass34 node or leave
-    as the default LLM_BASE_URL for Pass5Ingest (local machine).
+    Send a minimal request to the inference server so it loads *model_name*
+    into VRAM before real processing begins.  Called once per phase so every
+    document in that phase skips the cold-load penalty entirely.
     """
     try:
         from openai import OpenAI
@@ -687,7 +657,7 @@ def _run_timeout_retry_phase(timeout_registry, pdf_tasks, checkpoint_manager,
     for task in tasks_only:
         timeout_registry.clear_doc(task['checkpoint_filename'])
 
-    retry_pool   = _MultiNodePool(PASS34_NODE_URLS, LLM_API_KEY, LLM_TIMEOUT, CONCURRENCY)
+    retry_pool   = _InferencePool(LLM_BASE_URL, LLM_API_KEY, LLM_TIMEOUT, CONCURRENCY)
     retry_runner = _PersistentAsyncRunner(LLM_BASE_URL, LLM_API_KEY, LLM_TIMEOUT,
                                           CONCURRENCY_PASS_4)
     retry_infos  = []
@@ -845,17 +815,16 @@ def run_pipeline(progress_queue=None, stop_event=None):
         print("=" * 70 + "\n")
 
     # ── Phases A + B (pipelined) ──────────────────────────────────────────
-    # A single _MultiNodePool owns one client per Pass34 node and a shared
-    # NodePool spread across them.  Each PDF worker submits its Passes 2/2b/3
-    # to the pool's loop and blocks until done; inside, every page/figure/table
-    # request is distributed across all nodes, so one PDF fans out over every
-    # GPU and multiple PDFs share the same pool.  Phase B is submitted as soon
-    # as each PDF finishes Phase A, overlapping Pass5Ingest and Pass34.
+    # A single _InferencePool owns one client to the local inference server and
+    # a shared NodePool wrapping it.  Each PDF worker submits its Passes 2/2b/3
+    # to the pool's loop and blocks until done; the shared pool caps total
+    # concurrent requests at CONCURRENCY.  Phase B is submitted as soon as each
+    # PDF finishes Phase A, overlapping Pass5Ingest and Pass34.
     _emit({"type": "phase_start", "phase": "A", "total": len(pdf_tasks)})
     if progress_queue is None:
-        print(f"--- Phase A+B (pipelined): {len(PASS34_NODE_URLS)} Pass34 node(s) ---")
+        print("--- Phase A+B (pipelined) ---")
 
-    phase_a = _MultiNodePool(PASS34_NODE_URLS, LLM_API_KEY, LLM_TIMEOUT, CONCURRENCY)
+    phase_a = _InferencePool(LLM_BASE_URL, LLM_API_KEY, LLM_TIMEOUT, CONCURRENCY)
     # Local runner with one shared semaphore so Pass 3b/4 across ALL documents is
     # globally capped at CONCURRENCY_PASS_4 (not per-document).
     phase_b_runner = _PersistentAsyncRunner(LLM_BASE_URL, LLM_API_KEY, LLM_TIMEOUT,
@@ -909,18 +878,6 @@ def run_pipeline(progress_queue=None, stop_event=None):
                            "message": "Stop requested — finishing in-flight PDFs then halting."})
                     break
     finally:
-        # Report how Pass34 requests were split across nodes (balance check).
-        node_stats = phase_a.pool.stats()
-        total_reqs = sum(node_stats.values())
-        if total_reqs:
-            split = ", ".join(
-                f"{lbl}: {n} ({100 * n / total_reqs:.0f}%)"
-                for lbl, n in node_stats.items()
-            )
-            _emit({"type": "log", "level": "info",
-                   "message": f"Pass34 request split — {split}"})
-            if progress_queue is None:
-                print(f"  Pass34 request split — {split}")
         phase_a.close()
 
     _emit({"type": "phase_done", "phase": "A"})
@@ -1025,14 +982,6 @@ def run_pipeline(progress_queue=None, stop_event=None):
     if _stopped():
         _emit({"type": "pipeline_stopped"})
         return
-
-    # ── Phase 6: unload models ────────────────────────────────────────────
-    _emit({"type": "log", "level": "info", "message": "Phase 6 — Unloading models"})
-    for swap_url in PASS34_NODE_SWAP_URLS:                     # all Pass34 nodes
-        for model in sorted({MODEL_PASS_2, MODEL_PASS_2B, MODEL_PASS_3}):
-            unload_model(model, swap_url=swap_url)
-    for model in sorted({MODEL_PASS_3B, MODEL_PASS_4}):
-        unload_model(model, swap_url=LLAMA_SWAP_URL)           # local only
 
     # ── Phase 7: RAG ingestion ────────────────────────────────────────────
     # Pass the live checkpoint manager plus a map from each document's

@@ -60,15 +60,10 @@ SCHEMA: list[tuple[str, list[tuple[str, str, str]]]] = [
     # ---- Advanced ----
     ("LLM Server (local — Pass 3b/4 & ingest)", [
         ("LLM_BASE_URL",        "LLM base URL",            "str"),
-        ("LLAMA_SWAP_URL",      "llama-swap URL",          "str"),
         ("LLM_API_KEY",         "API key",                 "str"),
         ("LLM_TIMEOUT",         "Request timeout (ms)",    "int"),
         ("LLM_PREHEAT_TIMEOUT", "Preheat timeout (s)",     "int"),
         ("LLM_MAX_RETRIES",     "Max retries per call",    "int"),
-    ]),
-    ("Pass34 inference nodes (Pass 2/2b/3)", [
-        ("PASS34_NODE_URLS",      "Node URLs (one per line)",       "list"),
-        ("PASS34_NODE_SWAP_URLS", "Node llama-swap URLs (one per line)", "list"),
     ]),
     ("Models", [
         ("MODEL_PASS_2",  "Pass 2 model (page → markdown)",  "str"),

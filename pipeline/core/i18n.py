@@ -150,9 +150,6 @@ SECTIONS = {
     "LLM Server (local — Pass 3b/4 & ingest)":
         {"en": "LLM Server (local — Pass 3b/4 & ingest)",
          "tc": "LLM 伺服器（本地 — Pass 3b/4 與匯入）"},
-    "Pass34 inference nodes (Pass 2/2b/3)":
-        {"en": "Pass34 inference nodes (Pass 2/2b/3)",
-         "tc": "Pass34 推論節點（Pass 2/2b/3）"},
     "Models": {"en": "Models", "tc": "模型"},
     "Pass 1 — layout detection":
         {"en": "Pass 1 — layout detection", "tc": "Pass 1 — 版面偵測"},
@@ -165,13 +162,10 @@ FIELDS = {
     "ROOT_PATH":           {"en": "Project root (HIWIN folder)", "tc": "專案根目錄（HIWIN 資料夾）"},
     "IMAGE_TARGET_ROOT":   {"en": "Web static image target", "tc": "網頁靜態圖片目標"},
     "LLM_BASE_URL":        {"en": "LLM base URL", "tc": "LLM 基礎 URL"},
-    "LLAMA_SWAP_URL":      {"en": "llama-swap URL", "tc": "llama-swap URL"},
     "LLM_API_KEY":         {"en": "API key", "tc": "API 金鑰"},
     "LLM_TIMEOUT":         {"en": "Request timeout (ms)", "tc": "請求逾時（毫秒）"},
     "LLM_PREHEAT_TIMEOUT": {"en": "Preheat timeout (s)", "tc": "預熱逾時（秒）"},
     "LLM_MAX_RETRIES":     {"en": "Max retries per call", "tc": "每次呼叫最大重試次數"},
-    "PASS34_NODE_URLS":    {"en": "Node URLs (one per line)", "tc": "節點 URL（每行一個）"},
-    "PASS34_NODE_SWAP_URLS": {"en": "Node llama-swap URLs (one per line)", "tc": "節點 llama-swap URL（每行一個）"},
     "MODEL_PASS_2":        {"en": "Pass 2 model (page → markdown)", "tc": "Pass 2 模型（頁面 → markdown）"},
     "MODEL_PASS_2B":       {"en": "Pass 2b model (figure caption)", "tc": "Pass 2b 模型（圖片說明）"},
     "MODEL_PASS_3":        {"en": "Pass 3 model (table → markdown)", "tc": "Pass 3 模型（表格 → markdown）"},

@@ -16,14 +16,17 @@ def _raise_with_body(resp):
         raise RuntimeError(f"HTTP {resp.status_code} from {resp.url}: {resp.text}")
 
 
-def chat(messages, tools=None, model=None, timeout=None):
+def chat(messages, tools=None, model=None, timeout=None, base_url=None):
     """POST /v1/chat/completions and return the full JSON response.
 
     When `tools` is supplied the model may return `tool_calls` in the message —
-    this is what drives the agentic STATE machine.
+    this is what drives the agentic STATE machine. `base_url` targets a specific
+    inference endpoint (only needed if a model is served separately from the main
+    router); it defaults to the main server.
     """
     model = model or config.LANGUAGE_MODEL
     timeout = timeout or config.CHAT_TIMEOUT
+    base_url = base_url or config.INFERENCE_BASE_URL
     payload = {
         "model": model,
         "messages": messages,
@@ -34,15 +37,16 @@ def chat(messages, tools=None, model=None, timeout=None):
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
     resp = requests.post(
-        f"{config.INFERENCE_BASE_URL}/chat/completions", json=payload, timeout=timeout
+        f"{base_url}/chat/completions", json=payload, timeout=timeout
     )
     resp.raise_for_status()
     return resp.json()
 
 
-def chat_content(messages, model=None, timeout=None) -> str:
-    """Convenience: return just the assistant text. Used for the vision pass."""
-    data = chat(messages, model=model, timeout=timeout)
+def chat_content(messages, model=None, timeout=None, base_url=None) -> str:
+    """Convenience: return just the assistant text. Used for the vision and
+    completeness passes (the latter may target a smaller model via base_url)."""
+    data = chat(messages, model=model, timeout=timeout, base_url=base_url)
     return data["choices"][0]["message"]["content"]
 
 

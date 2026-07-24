@@ -81,7 +81,7 @@ async function send() {
   if (!prompt) return;
 
   $('send').disabled = true;
-  $('status').textContent = 'Thinking… (retrieval + model; a cold model swap can take ~20s)';
+  $('status').textContent = 'Thinking… (retrieval + model; a cold model load can take ~20s)';
   $('answer').innerHTML = '';
   $('sources').innerHTML = '';
   $('debug').innerHTML = '';
