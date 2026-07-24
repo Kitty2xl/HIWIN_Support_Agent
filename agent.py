@@ -97,21 +97,18 @@ async def _enumerate_passage(question: str, passage: str, sem: asyncio.Semaphore
             return f"__ERROR__: {e}"
 
 
-async def _completeness_pass(question: str, draft: str, passages: list) -> tuple[str, int, list]:
-    """Fight under-enumeration: extract every matching entry from each passage
-    (focused, concurrent), then rewrite the answer to include them all — EXPANDING
-    scope to types/pages the draft omitted, not just enriching what it covered.
-
-    Returns (answer, llm_call_count, details). `details` is a per-passage record
-    (source tag + whether entries were found + the enumeration) for debugging.
-    Falls back to the draft on any failure."""
+async def _enumerate_passages(question: str, passages: list) -> tuple[list, int, list]:
+    """Run the small enumeration model over each UNIQUE passage (focused,
+    concurrent). Returns (findings, llm_call_count, details): findings are the
+    non-NONE extractions; details is a per-passage record (source tag + status +
+    raw output) for the debug panel. Shared by both completeness modes."""
     seen, uniq = set(), []
     for p in passages:                       # same page can be retrieved twice
         if p not in seen:
             seen.add(p)
             uniq.append(p)
     if not uniq:
-        return draft, 0, []
+        return [], 0, []
 
     sem = asyncio.Semaphore(max(1, config.COMPLETENESS_CONCURRENCY))
     enums = await asyncio.gather(*(_enumerate_passage(question, p, sem) for p in uniq))
@@ -132,6 +129,14 @@ async def _completeness_pass(question: str, draft: str, passages: list) -> tuple
         })
         if status == "found":
             findings.append(e)
+    return findings, calls, details
+
+
+async def _completeness_pass(question: str, draft: str, passages: list) -> tuple[str, int, list]:
+    """post_draft mode: enumerate every passage, then rewrite the draft to include
+    all findings — EXPANDING scope to types/pages the draft omitted. Returns
+    (answer, llm_call_count, details); falls back to the draft on failure."""
+    findings, calls, details = await _enumerate_passages(question, passages)
 
     if not findings:
         return draft, calls, details
@@ -223,9 +228,11 @@ async def run(system: str, user_msg: str, trace: list = None,
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
             answer = msg.get("content") or ""
-            # Focused per-table enumeration pass to catch rows the broad answer
-            # summarized away (see config.COMPLETENESS_PASS_ENABLED).
-            if config.COMPLETENESS_PASS_ENABLED and retrieved_passages and answer.strip():
+            # post_draft: re-read the passages after the draft and reconcile.
+            # (pre_draft already fed the extracted rows into the draft, in-loop.)
+            if (config.COMPLETENESS_PASS_ENABLED
+                    and config.COMPLETENESS_MODE == "post_draft"
+                    and retrieved_passages and answer.strip()):
                 answer, ncalls, completeness_details = await _completeness_pass(
                     user_msg, answer, retrieved_passages
                 )
@@ -243,11 +250,26 @@ async def run(system: str, user_msg: str, trace: list = None,
             text, srcs = await _run_tool(name, args)
 
             # Keep the individual source passages (retrieval tools return srcs)
-            # for the post-answer completeness pass.
+            # for the completeness pass.
             if srcs:
-                retrieved_passages.extend(
-                    p for p in text.split("\n---\n") if p.strip().startswith("[SOURCE:")
-                )
+                passages_here = [p for p in text.split("\n---\n")
+                                 if p.strip().startswith("[SOURCE:")]
+                retrieved_passages.extend(passages_here)
+
+                # pre_draft: enumerate the matching rows NOW and append them to the
+                # tool result, so the model drafts once from raw passages + rows
+                # (no separate reconciliation later).
+                if (config.COMPLETENESS_PASS_ENABLED
+                        and config.COMPLETENESS_MODE == "pre_draft" and passages_here):
+                    findings, ncalls, details = await _enumerate_passages(
+                        user_msg, passages_here
+                    )
+                    completeness_calls += ncalls
+                    completeness_details.extend(details)
+                    if findings:
+                        text += ("\n---\n[COMPLETE MATCHING ENTRIES — extracted from "
+                                 "the passages above; include EVERY one in your "
+                                 "answer]\n" + "\n\n".join(findings))
 
             # Accumulate citations across all tool calls, de-duplicated on
             # identity EXCLUDING rerank_score (the same chunk can come back from

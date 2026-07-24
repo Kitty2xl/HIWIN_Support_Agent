@@ -134,6 +134,15 @@ COMPLETENESS_EXPLAIN_NONE = _bool_env("COMPLETENESS_EXPLAIN_NONE", "true")
 # if you serve the small model at a different endpoint; it defaults to the main one.
 COMPLETENESS_MODEL    = _env("COMPLETENESS_MODEL", LANGUAGE_MODEL)
 COMPLETENESS_BASE_URL = _env("COMPLETENESS_BASE_URL", INFERENCE_BASE_URL)
+# WHERE the enumeration runs relative to the main draft:
+#   post_draft (default) — draft first, then re-read all passages and reconcile
+#     (two main-LLM passes; the raw passages are a safety net for the reconcile).
+#   pre_draft — extract matching rows from each reranked passage BEFORE the draft
+#     and append them to the tool result, so the model drafts ONCE from the raw
+#     passages + the extracted rows (no separate reconciliation). Denser context,
+#     one main-LLM pass. Best paired with KEEP_RECENT_TOOL_RESULTS=-1 so the
+#     extracted rows aren't trimmed out of context before the draft.
+COMPLETENESS_MODE     = _env("COMPLETENESS_MODE", "post_draft")
 
 
 # --- Chat logging ---

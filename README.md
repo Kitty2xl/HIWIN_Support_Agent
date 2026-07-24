@@ -453,7 +453,7 @@ Response:
 
 ### Batch runner
 
-`run_prompts.py` sends a set of requests and saves a markdown + JSON report:
+`run_prompts.py` sends a set of requests and saves a JSON report (request, per-request timing, and the full response — answer, sources, trace, metrics):
 
 ```bash
 python run_prompts.py                          # every examples/*.json

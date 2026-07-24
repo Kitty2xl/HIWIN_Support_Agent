@@ -1,7 +1,8 @@
 """Send a batch of /chat requests and save the responses to a file.
 
-Reads request files and POSTs each to the backend, then writes a readable
-Markdown report plus a raw JSON dump. Accepted inputs (each record is the same
+Reads request files and POSTs each to the backend, then writes a raw JSON dump
+(each record: request, per-request timing, and the full response — answer,
+sources, trace, metrics). Accepted inputs (each record is the same
 `{"prompt": ..., "language": ...}` shape the API takes; a `"question"` key works
 in place of `"prompt"`, so a Q&A JSONL can be replayed directly):
 
@@ -28,6 +29,7 @@ import glob
 import json
 import os
 import sys
+import time
 
 import requests
 
@@ -35,13 +37,13 @@ import requests
 CHAT_URL   = os.environ.get("CHAT_URL", "http://localhost:8079/chat")
 TIMEOUT    = int(os.environ.get("CHAT_TIMEOUT", "300"))  # cold model loads can be slow
 FILES      = []          # request files to send; [] = every examples/*.json
-OUTPUT_DIR = "."         # where results_<timestamp>.md / .json are written
+OUTPUT_DIR = "."         # where results_<timestamp>.json is written
 # -----------------------------------------------------------------------------
 
 
 def parse_args(argv):
     p = argparse.ArgumentParser(
-        description="Send a batch of /chat requests and save a Markdown + JSON report.")
+        description="Send a batch of /chat requests and save a JSON report.")
     p.add_argument("files", nargs="*",
                    help="request JSON files (default: the SETTINGS FILES list, or "
                         "every examples/*.json if that is empty)")
@@ -85,61 +87,39 @@ def main(argv=None):
 
     os.makedirs(args.output_dir, exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    md_path = os.path.join(args.output_dir, f"results_{ts}.md")
     json_path = os.path.join(args.output_dir, f"results_{ts}.json")
     raw = []
 
-    with open(md_path, "w", encoding="utf-8") as out:
-        out.write(f"# Chat results — {ts}\n\nEndpoint: `{args.url}`\n")
-        for fname, payload in reqs:
-            prompt = payload.get("prompt") or payload.get("question") or ""
-            print(f"-> {fname}: {prompt[:60]}")
-            out.write(f"\n---\n\n## {fname}\n\n")
-            out.write(f"**Prompt:** {prompt}\n\n")
-            out.write(f"**Language:** {payload.get('language', '(default)')}\n\n")
-            try:
-                body = {"prompt": prompt, "language": payload.get("language")}
-                resp = requests.post(args.url, json=body, timeout=args.timeout)
-                resp.raise_for_status()
-                data = resp.json()
-            except Exception as e:
-                out.write(f"**ERROR:** {e}\n")
-                print(f"   ERROR: {e}")
-                raw.append({"file": fname, "request": payload, "error": str(e)})
-                continue
+    for fname, payload in reqs:
+        prompt = payload.get("prompt") or payload.get("question") or ""
+        print(f"-> {fname}: {prompt[:60]}")
+        started = time.perf_counter()
+        try:
+            body = {"prompt": prompt, "language": payload.get("language")}
+            resp = requests.post(args.url, json=body, timeout=args.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            elapsed = round(time.perf_counter() - started, 2)
+            print(f"   ERROR after {elapsed}s: {e}")
+            raw.append({"file": fname, "request": payload,
+                        "elapsed_s": elapsed, "error": str(e)})
+            continue
+        elapsed = round(time.perf_counter() - started, 2)
 
-            tools = [t.get("tool") for t in data.get("trace", [])]
-            out.write(f"**Tools called:** {', '.join(tools) if tools else '(none)'}\n\n")
+        m = data.get("metrics") or {}
+        tools = [t.get("tool") for t in data.get("trace", [])]
+        srcs = data.get("sources", [])
+        print(f"   done in {elapsed}s — {len(tools)} tool call(s), {len(srcs)} source(s), "
+              f"completeness_calls={m.get('completeness_calls')}")
 
-            m = data.get("metrics", {})
-            if m:
-                out.write(
-                    f"**Metrics:** completeness_calls={m.get('completeness_calls')} · "
-                    f"llm_calls={m.get('llm_calls')} · tool_calls={m.get('tool_calls')} · "
-                    f"tokens={m.get('total_tokens')} · latency={m.get('latency_ms')} ms\n\n"
-                )
-
-            out.write(f"**Response:**\n\n{data.get('response', '')}\n\n")
-
-            srcs = data.get("sources", [])
-            out.write(f"**Sources ({len(srcs)}):**\n")
-            if srcs:
-                for s in srcs:
-                    bits = [f"{k}={s[k]}" for k in
-                            ("file_name", "page_number", "product_type",
-                             "language_code", "web_path", "rerank_score")
-                            if s.get(k) is not None]
-                    out.write(f"- {' · '.join(bits) if bits else json.dumps(s, ensure_ascii=False)}\n")
-            else:
-                out.write("(none)\n")
-            out.write("\n")
-            raw.append({"file": fname, "request": payload, "response": data})
+        raw.append({"file": fname, "request": payload,
+                    "elapsed_s": elapsed, "response": data})
 
     with open(json_path, "w", encoding="utf-8") as jf:
         json.dump(raw, jf, ensure_ascii=False, indent=2)
 
-    print(f"\nSaved -> {md_path}")
-    print(f"Saved -> {json_path}")
+    print(f"\nSaved -> {json_path}")
 
 
 if __name__ == "__main__":

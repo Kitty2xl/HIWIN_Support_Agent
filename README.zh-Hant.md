@@ -421,7 +421,7 @@ curl -X POST http://localhost:8079/chat \
 
 ### 批次測試工具
 
-`run_prompts.py` 會送出一組請求並輸出 Markdown 與 JSON 報告：
+`run_prompts.py` 會送出一組請求並輸出 JSON 報告（請求、每筆的耗時，以及完整回應——答覆、來源、trace、metrics）：
 
 ```bash
 python run_prompts.py                          # 執行所有 examples/*.json
