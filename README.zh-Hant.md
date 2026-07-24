@@ -95,7 +95,7 @@ LLM 會依系統提示自行決定要呼叫哪些工具、以及何時呼叫—�
 2. **讓啟動器指向你的推論伺服器。** 開啟 `start.bat`（Windows）或 `start.sh`
    （Linux/macOS），於檔案頂端設定兩個值：`LLAMA_SERVER`（你的 `llama-server`
    執行檔）與 `PRESET`（一份路由 preset——複製
-   [`router.example.ini`](router.example.ini) 並把其中的 `model` / `mmproj` 路徑
+   [`config.ini`](config.ini) 並把其中的 `model` / `mmproj` 路徑
    改為你的 GGUF）。
 3. **填好 `.env`**——至少 `IMAGE_STATIC_ROOT` 與 `DB_PASSWORD`（見[設定](#設定)）。
 4. **執行**（會建立 venv、以所有模型常駐啟動路由、等待就緒，再啟動後端）：
@@ -172,14 +172,14 @@ LLM 會依系統提示自行決定要呼叫哪些工具、以及何時呼叫—�
   小模型之間不再換入換出）。請將用戶端指向該端點：後端的 `INFERENCE_HOST` 與管線的
   `LLM_BASE_URL`。
 
-> **本專案內附一份可直接編輯的路由 preset——[`router.example.ini`](router.example.ini)。**
+> **本專案內附一份可直接編輯的路由 preset——[`config.ini`](config.ini)。**
 > 每個 `[區段]` 即一個可路由的模型名稱（須與 `.env` / `pipeline/settings.json` 中的
 > 名稱一致，見[模型名稱如何串接](#模型名稱如何串接)）；鍵即 `llama-server` 的長參數
 > 去掉開頭的 `--`（`--n-gpu-layers 99` → `n-gpu-layers = 99`）。請將其中的 `model` /
 > `mmproj` 路徑改為你的 GGUF，然後：
 >
 > ```sh
-> llama-server --models-preset router.example.ini --host 127.0.0.1 --port 11400
+> llama-server --models-preset config.ini --host 127.0.0.1 --port 11400
 > ```
 >
 > `start.bat` / `start.sh` 啟動器會為你執行以上命令。完整 preset schema 與
@@ -304,6 +304,9 @@ CHAT_LOG_ENABLED=true
 | `FIGURE_TEXT_MAX_CHARS` | `120` | 在送入模型前截斷冗長的圖說（節省脈絡）。 |
 | `KEEP_RECENT_TOOL_RESULTS` | `4` | 執行中的脈絡只完整保留最近 N 筆工具結果；較舊的以摘要取代。`-1` 停用。 |
 | `TRACE_RESULT_MAX_CHARS` | `600` | 除錯 trace 保留每筆工具結果的字元數。`0` = 不截斷。 |
+| `PARALLEL_TOOL_CALLS` | `true` | 將一輪中的多個工具呼叫（例如多個關鍵字搜尋）並行執行，而非逐一執行。 |
+| `DB_SEARCH_CONCURRENCY` | `8` | 單次手冊搜尋內，各資料表向量搜尋的最大並行數。 |
+| `DB_POOL_MAX` | `12` | 共用連線池的最大 Postgres 連線數（依上述並行度設定）。 |
 
 > **語言代碼**（`en` / `jp` / `tc` / `sc`）必須與資料庫中
 > `metadata_->>'language_code'` 儲存的值一致。可用
@@ -320,7 +323,7 @@ CHAT_LOG_ENABLED=true
 
 ## 模型參數
 
-大多數生成設定位於**推論伺服器**——即 `--models-preset`（`router.example.ini`）中每個
+大多數生成設定位於**推論伺服器**——即 `--models-preset`（`config.ini`）中每個
 模型的區段，而非本專案內。最重要的兩項：
 
 - **Temperature（溫度，`--temp`，例如 `--temp 0.7`）。** 輸出的隨機程度：`0` 為
@@ -335,7 +338,7 @@ CHAT_LOG_ENABLED=true
   所需 GPU 記憶體越多。請設為足以容納您最長的頁面或表格再加上模型的答覆；若請求超過
   此長度，伺服器會截斷輸入或報錯。應用程式不會更動此值——它由您啟動模型的方式決定。
 
-preset 範例（於 `router.example.ini`）：`ctx-size = 100000`、`temp = 0.7`……請於
+preset 範例（於 `config.ini`）：`ctx-size = 100000`、`temp = 0.7`……請於
 preset 中修改後重啟路由；本專案無需改動。
 
 ## 啟動服務
@@ -685,7 +688,7 @@ HIWIN_Support_Agent/
 ├── db.py               # Postgres 存取與 SQL
 ├── prompts.py          # 組成系統提示 = System_prompt.md + skill
 ├── config.py           # 以環境變數驅動的設定（載入 .env）
-├── router.example.ini  # llama.cpp 路由 preset（改好模型路徑後即可啟動）
+├── config.ini  # llama.cpp 路由 preset（改好模型路徑後即可啟動）
 ├── start.bat / start.sh# 一鍵啟動：路由（所有模型）+ 後端
 ├── run.bat / run.sh    # 僅啟動後端（路由已在執行時）
 ├── run_prompts.py      # 批次測試工具

@@ -12,7 +12,7 @@ cd /d "%~dp0"
 
 REM ---- CONFIG: edit these for your machine (or set them as env vars) ----
 if "%LLAMA_SERVER%"=="" set "LLAMA_SERVER=C:\Users\User_11\Desktop\llama\llama-server.exe"
-if "%PRESET%"=="" set "PRESET=%~dp0router.example.ini"
+if "%PRESET%"=="" set "PRESET=%~dp0config.ini"
 if "%ROUTER_HOST%"=="" set "ROUTER_HOST=127.0.0.1"
 if "%ROUTER_PORT%"=="" set "ROUTER_PORT=11400"
 REM ----------------------------------------------------------------------

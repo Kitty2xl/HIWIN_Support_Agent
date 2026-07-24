@@ -98,7 +98,7 @@ the shortest path to a live `/chat` API — no pipeline, no rebuild:
 2. **Point the launcher at your inference server.** Open `start.bat` (Windows) or
    `start.sh` (Linux/macOS) and set two values at the top: `LLAMA_SERVER` (your
    `llama-server` binary) and `PRESET` (a router preset — copy
-   [`router.example.ini`](router.example.ini) and edit its `model` / `mmproj`
+   [`config.ini`](config.ini) and edit its `model` / `mmproj`
    paths to your GGUFs).
 3. **Fill in `.env`** — at least `IMAGE_STATIC_ROOT` and `DB_PASSWORD` (see
    [Configuration](#configuration)).
@@ -189,14 +189,14 @@ pipeline → serve with the backend.**
   and the pipeline's `LLM_BASE_URL`.
 
 > **The repo ships a ready-to-edit router preset —
-> [`router.example.ini`](router.example.ini).** Each `[section]` is a routable
+> [`config.ini`](config.ini).** Each `[section]` is a routable
 > model name (must equal the names in `.env` / `pipeline/settings.json` — see
 > [How the model names link up](#how-the-model-names-link-up)); keys are
 > `llama-server`'s long flags without the leading `--` (`--n-gpu-layers 99` →
 > `n-gpu-layers = 99`). Edit the `model` / `mmproj` paths to your GGUFs, then:
 >
 > ```sh
-> llama-server --models-preset router.example.ini --host 127.0.0.1 --port 11400
+> llama-server --models-preset config.ini --host 127.0.0.1 --port 11400
 > ```
 >
 > The `start.bat` / `start.sh` launchers run exactly this for you. See the
@@ -326,6 +326,9 @@ only touch these to trade recall vs. speed:
 | `FIGURE_TEXT_MAX_CHARS` | `120` | Truncate verbose figure descriptions before they reach the model (context saver). |
 | `KEEP_RECENT_TOOL_RESULTS` | `4` | Keep only the N most recent tool results in full in the running context; stub older ones. `-1` disables. |
 | `TRACE_RESULT_MAX_CHARS` | `600` | How much of each tool result the debug trace keeps. `0` = no truncation. |
+| `PARALLEL_TOOL_CALLS` | `true` | Run a turn's tool calls (e.g. several keyword searches) concurrently instead of one-by-one. |
+| `DB_SEARCH_CONCURRENCY` | `8` | Max concurrent per-table vector searches within one manual search. |
+| `DB_POOL_MAX` | `12` | Max Postgres connections in the shared pool (sized for the parallelism above). |
 
 > **Language codes** (`en` / `jp` / `tc` / `sc`) must match the values stored in the
 > DB's `metadata_->>'language_code'`. Confirm with `python inspect_metadata.py`.
@@ -345,7 +348,7 @@ only touch these to trade recall vs. speed:
 ## Model parameters
 
 Most generation settings live on the **inference server** — each model's section
-in your `--models-preset` (`router.example.ini`) — not in this repo. The two
+in your `--models-preset` (`config.ini`) — not in this repo. The two
 that matter most:
 
 - **Temperature** (`--temp`, e.g. `--temp 0.7`). How random the output is: `0` is
@@ -364,7 +367,7 @@ that matter most:
   request exceeds it, the server truncates the input or errors out. The apps never
   change this — it's fixed by how you launch the model.
 
-Example preset entry (in `router.example.ini`): `ctx-size = 100000`, `temp = 0.7`,
+Example preset entry (in `config.ini`): `ctx-size = 100000`, `temp = 0.7`,
 … Change these in the preset, then restart the router; no change to this repo is
 needed.
 
@@ -745,7 +748,7 @@ HIWIN_Support_Agent/
 ├── db.py               # Postgres access + SQL
 ├── prompts.py          # builds system prompt = System_prompt.md + skill
 ├── config.py           # env-driven settings (loads .env)
-├── router.example.ini  # llama.cpp router preset (edit model paths, then launch)
+├── config.ini  # llama.cpp router preset (edit model paths, then launch)
 ├── start.bat / start.sh# one-command launch: router (all models) + backend
 ├── run.bat / run.sh    # backend-only launch (router already running)
 ├── run_prompts.py      # batch tester

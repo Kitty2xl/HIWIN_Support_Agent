@@ -7,9 +7,11 @@ constant for readability.
 
 import base64
 import re
+import threading
 
 import psycopg2
 from psycopg2.extras import Json
+from psycopg2.pool import ThreadedConnectionPool
 
 import config
 
@@ -62,15 +64,50 @@ SQL_VECTOR_BYPASS_META = (
 )
 
 
+# Lazily-created connection pool, shared across threads. Parallel per-table
+# searches and parallel tool calls open several connections at once, so pooling
+# avoids the per-query connect/handshake cost and caps the total. Always return a
+# borrowed connection with release_connection(), NOT conn.close() (which would
+# drop it from the pool and eventually exhaust it).
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _get_pool() -> ThreadedConnectionPool:
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                _pool = ThreadedConnectionPool(
+                    1, config.DB_POOL_MAX,
+                    dbname=config.DB_NAME,
+                    user=config.DB_USER,
+                    password=config.DB_PASSWORD,
+                    host=config.DB_HOST,
+                    port=config.DB_PORT,
+                    sslmode=config.DB_SSLMODE,
+                )
+    return _pool
+
+
 def get_connection():
-    return psycopg2.connect(
-        dbname=config.DB_NAME,
-        user=config.DB_USER,
-        password=config.DB_PASSWORD,
-        host=config.DB_HOST,
-        port=config.DB_PORT,
-        sslmode=config.DB_SSLMODE,
-    )
+    """Borrow a connection from the pool. Pair every call with release_connection()."""
+    return _get_pool().getconn()
+
+
+def release_connection(conn):
+    """Return a connection to the pool, rolling back any open/aborted transaction
+    so the next borrower gets a clean one. Safe to call with None."""
+    if conn is None:
+        return
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+    try:
+        _get_pool().putconn(conn)
+    except Exception:
+        pass
 
 
 def fetch_existing_tables():
@@ -84,8 +121,7 @@ def fetch_existing_tables():
     except Exception:
         return []
     finally:
-        if conn is not None:
-            conn.close()
+        release_connection(conn)
 
 
 def resolve_tables(requested: list, existing: list):
@@ -217,5 +253,4 @@ def log_chat(prompt, language, response, sources, trace, metrics, latency_ms) ->
         print(f"WARNING: chat log write failed: {e}")
         return False
     finally:
-        if conn is not None:
-            conn.close()
+        release_connection(conn)

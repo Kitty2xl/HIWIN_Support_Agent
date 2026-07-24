@@ -287,79 +287,75 @@ async def db_search_technical_manuals(
                 "valid product tables, then retry with a product_table value."
             )
 
-        def fetch_from_db(lang: str):
-            conn = None
-            results = []
-            try:
-                conn = db.get_connection()
-                with conn.cursor() as cur:
-                    cur.execute(db.SQL_LIST_DATA_TABLES, (config.DB_SCHEMA,))
-                    existing_tables = [row[0] for row in cur.fetchall()]
+        # Forgiving resolution: map the model's guesses onto real table names
+        # (case / prefix / punctuation tolerant), once — it doesn't change by
+        # language.
+        existing_tables = await asyncio.to_thread(db.fetch_existing_tables)
+        table_list, unmatched = db.resolve_tables(product_table, existing_tables)
+        if unmatched:
+            print(f"Unmatched product_table values ignored: {unmatched}")
 
-                    # Forgiving resolution: map the model's guesses onto real
-                    # table names (case / prefix / punctuation tolerant).
-                    table_list, unmatched = db.resolve_tables(
-                        product_table, existing_tables
-                    )
-                    if unmatched:
-                        print(f"Unmatched product_table values ignored: {unmatched}")
-
-                    # Bypass table: match by RESOLVED name against the real table,
-                    # whatever its exact spelling.
-                    is_bypass_table = {
-                        t
-                        for t in table_list
-                        if t.lower() in ("data_all_products", "data_allproducts")
-                    }
-
-                    # Sentinel: distinguish "no tables matched" from "matched but empty".
-                    if not table_list:
-                        return None
-
-                    for table_name in table_list:
-                        try:
-                            if table_name in is_bypass_table:
-                                sql = db.SQL_VECTOR_BYPASS_META.format(
-                                    content=config.CONTENT_COLUMN,
-                                    schema=config.DB_SCHEMA,
-                                    table=table_name,
-                                )
-                                cur.execute(sql, (lang,))
-                                results.extend(cur.fetchall())
-                            else:
-                                sql = db.SQL_VECTOR_SEARCH_META.format(
-                                    content=config.CONTENT_COLUMN,
-                                    embedding=config.EMBEDDING_COLUMN,
-                                    schema=config.DB_SCHEMA,
-                                    table=table_name,
-                                    limit=initial_top_K,
-                                )
-                                cur.execute(sql, (json.dumps(query_vector), lang))
-                                results.extend(cur.fetchall())
-                        except Exception as table_err:
-                            print(f"Error querying table {table_name}: {table_err}")
-                            conn.rollback()
-            except Exception as db_err:
-                print(f"Database connection error: {db_err}")
-                raise
-            finally:
-                if conn is not None:
-                    conn.close()
-            return results
-
-        all_results = await asyncio.to_thread(fetch_from_db, language_code)
-
-        if all_results is None:
-            available = await asyncio.to_thread(db.fetch_existing_tables)
-            listing = ", ".join(available) if available else "(none found)"
+        if not table_list:
+            listing = ", ".join(existing_tables) if existing_tables else "(none found)"
             return (
                 f"None of {product_table} matched a real table. "
                 f"Choose EXACTLY ONE OR MORE from this list and call again: {listing}"
             )
 
+        # Bypass table: match by RESOLVED name against the real table.
+        bypass_tables = {
+            t for t in table_list
+            if t.lower() in ("data_all_products", "data_allproducts")
+        }
+
+        def _search_one_table(table_name: str, lang: str):
+            """Vector-search ONE table. Synchronous (runs in a thread) with its own
+            pooled connection, so multiple tables can be searched concurrently."""
+            conn = None
+            try:
+                conn = db.get_connection()
+                with conn.cursor() as cur:
+                    if table_name in bypass_tables:
+                        sql = db.SQL_VECTOR_BYPASS_META.format(
+                            content=config.CONTENT_COLUMN,
+                            schema=config.DB_SCHEMA,
+                            table=table_name,
+                        )
+                        cur.execute(sql, (lang,))
+                    else:
+                        sql = db.SQL_VECTOR_SEARCH_META.format(
+                            content=config.CONTENT_COLUMN,
+                            embedding=config.EMBEDDING_COLUMN,
+                            schema=config.DB_SCHEMA,
+                            table=table_name,
+                            limit=initial_top_K,
+                        )
+                        cur.execute(sql, (json.dumps(query_vector), lang))
+                    return cur.fetchall()
+            except Exception as table_err:
+                print(f"Error querying table {table_name}: {table_err}")
+                return []
+            finally:
+                db.release_connection(conn)
+
+        _db_sem = asyncio.Semaphore(max(1, config.DB_SEARCH_CONCURRENCY))
+
+        async def _search(table_name: str, lang: str):
+            async with _db_sem:
+                return await asyncio.to_thread(_search_one_table, table_name, lang)
+
+        async def fetch_from_db(lang: str):
+            per_table = await asyncio.gather(*(_search(t, lang) for t in table_list))
+            merged = []
+            for rows in per_table:
+                merged.extend(rows)
+            return merged
+
+        all_results = await fetch_from_db(language_code)
+
         if not all_results:
             if language_code != "en":
-                all_results = await asyncio.to_thread(fetch_from_db, "en")
+                all_results = await fetch_from_db("en")
                 if not all_results:
                     return (
                         f"No results found for language '{language_code}' or 'en' "
@@ -445,8 +441,7 @@ async def db_search_certifications(query: str, language_code: str = "en") -> str
                 print(f"Certifications DB error: {e}")
                 return []
             finally:
-                if conn is not None:
-                    conn.close()
+                db.release_connection(conn)
 
         all_results = await asyncio.to_thread(fetch_from_db, language_code)
 
@@ -513,8 +508,7 @@ async def db_search_product_urls() -> str:
             except Exception as e:
                 return f"Database error: {e}"
             finally:
-                if conn is not None:
-                    conn.close()
+                db.release_connection(conn)
 
         results = await asyncio.to_thread(fetch_all_data)
 

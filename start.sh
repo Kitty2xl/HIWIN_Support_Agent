@@ -12,7 +12,7 @@ cd "$(dirname "$0")"
 
 # ---- CONFIG: edit these for your machine (or set them as env vars) ----
 LLAMA_SERVER="${LLAMA_SERVER:-/path/to/llama/llama-server}"
-PRESET="${PRESET:-./router.example.ini}"
+PRESET="${PRESET:-./config.ini}"
 ROUTER_HOST="${ROUTER_HOST:-127.0.0.1}"
 ROUTER_PORT="${ROUTER_PORT:-11400}"
 # ----------------------------------------------------------------------

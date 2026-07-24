@@ -240,14 +240,26 @@ async def run(system: str, user_msg: str, trace: list = None,
             _finalize()
             return answer
 
-        for tc in tool_calls:
-            tool_calls_count += 1
+        # The model often emits several tool calls in one turn (e.g. multiple
+        # keyword searches). Each is embed → pgvector → rerank → vision, and they
+        # are independent — so run them concurrently unless PARALLEL_TOOL_CALLS is
+        # off. Results are folded back into the conversation in call order.
+        async def _call(tc):
             name = tc["function"]["name"]
             try:
-                args = json.loads(tc["function"].get("arguments") or "{}")
+                a = json.loads(tc["function"].get("arguments") or "{}")
             except Exception:
-                args = {}
-            text, srcs = await _run_tool(name, args)
+                a = {}
+            text, srcs = await _run_tool(name, a)
+            return name, a, text, srcs
+
+        if config.PARALLEL_TOOL_CALLS and len(tool_calls) > 1:
+            call_results = await asyncio.gather(*(_call(tc) for tc in tool_calls))
+        else:
+            call_results = [await _call(tc) for tc in tool_calls]
+
+        for tc, (name, args, text, srcs) in zip(tool_calls, call_results):
+            tool_calls_count += 1
 
             # Keep the individual source passages (retrieval tools return srcs)
             # for the completeness pass.

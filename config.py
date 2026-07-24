@@ -25,6 +25,10 @@ def _env(key: str, default: str) -> str:
     return os.environ.get(key, default)
 
 
+def _bool_env(key: str, default: str) -> bool:
+    return _env(key, default).strip().lower() in ("1", "true", "yes", "on")
+
+
 # --- Inference server (llama.cpp router mode, OpenAI-compatible) ---
 # One endpoint serves every model; requests route by the model name below.
 # Default assumes the backend runs ON the model/DB server, so localhost works.
@@ -49,6 +53,10 @@ VECTOR_TOP_K       = int(_env("VECTOR_TOP_K", "15"))       # per-table SQL LIMIT
 RERANK_CANDIDATE_K = int(_env("RERANK_CANDIDATE_K", "20"))  # passages fed to reranker
 RERANK_TOP_K       = int(_env("RERANK_TOP_K", "6"))        # passages kept (manuals)
 CERT_RERANK_TOP_K  = int(_env("CERT_RERANK_TOP_K", "10"))  # passages kept (certifications)
+# When a manual search spans several product_tables, their vector searches run in
+# parallel, bounded by this many concurrent DB queries (each borrows a pooled
+# connection — keep it <= DB_POOL_MAX).
+DB_SEARCH_CONCURRENCY = int(_env("DB_SEARCH_CONCURRENCY", "8"))
 
 # --- Context control (keep the running conversation from overflowing n_ctx) ---
 # Verbose auto-generated figure descriptions are truncated to this many chars
@@ -76,6 +84,9 @@ DB_SCHEMA = _env("DB_SCHEMA", "hiwin_rag")
 DB_SSLMODE = _env("DB_SSLMODE", "prefer")  # try "disable" or "require" to debug remote handshakes
 CONTENT_COLUMN = _env("CONTENT_COLUMN", "text")
 EMBEDDING_COLUMN = _env("EMBEDDING_COLUMN", "embedding")
+# Max connections in the shared pool. Sized for parallel table searches ×
+# parallel tool calls; raise if you see the pool block under heavy concurrency.
+DB_POOL_MAX = int(_env("DB_POOL_MAX", "12"))
 
 # --- Images / vision ---
 # Filesystem path to the HIWIN static image folder (served at /static/HIWIN and
@@ -86,14 +97,14 @@ VISION_MAX_IMAGES = int(_env("VISION_MAX_IMAGES", "4"))
 # --- Agent / routing ---
 MAX_AGENT_ITERS = int(_env("MAX_AGENT_ITERS", "8"))
 DEFAULT_LANGUAGE = _env("DEFAULT_LANGUAGE", "tc")  # per System_prompt STATE 0
+# When the model emits several tool calls in one turn (e.g. multiple keyword
+# searches), run them concurrently instead of one-by-one. Set false to serialize
+# if your inference server / DB can't handle the concurrent load.
+PARALLEL_TOOL_CALLS = _bool_env("PARALLEL_TOOL_CALLS", "true")
 # Max chars of each tool result kept in the trace (debug panel + chat log).
 # 0 = no truncation. Raise this to inspect full retrieved passages when
 # debugging recall; keep it modest in production to bound chat-log row size.
 TRACE_RESULT_MAX_CHARS = int(_env("TRACE_RESULT_MAX_CHARS", "600"))
-
-
-def _bool_env(key: str, default: str) -> bool:
-    return _env(key, default).strip().lower() in ("1", "true", "yes", "on")
 
 
 # --- Relevance grading (per-passage "does this help?" second pass) ---
