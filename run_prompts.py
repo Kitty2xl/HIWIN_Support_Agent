@@ -2,7 +2,10 @@
 
 Reads request files and POSTs each to the backend, then writes a raw JSON dump
 (each record: request, per-request timing, and the full response — answer,
-sources, trace, metrics). Accepted inputs (each record is the same
+sources, trace, metrics). Per request it prints the latency broken down by call
+kind (agent loop / vision / completeness / embed / rerank), and finishes with a
+table of those totals across the whole batch — which is what tells you where a
+slow run is actually spending its time. Accepted inputs (each record is the same
 `{"prompt": ..., "language": ...}` shape the API takes; a `"question"` key works
 in place of `"prompt"`, so a Q&A JSONL can be replayed directly):
 
@@ -56,6 +59,53 @@ def parse_args(argv):
     return p.parse_args(argv)
 
 
+def fmt_ms(ms):
+    """Compact duration for terminal output: '840 ms', '4.2 s', '1m 03.4s'."""
+    if ms is None:
+        return "—"
+    if ms < 1000:
+        return f"{ms:.0f} ms"
+    s = ms / 1000
+    if s < 60:
+        return f"{s:.1f} s"
+    return f"{int(s // 60)}m {s % 60:04.1f}s"
+
+
+def kind_line(by_kind):
+    """One-line per-request breakdown, slowest call kind first."""
+    if not by_kind:
+        return ""
+    return " | ".join(
+        f"{k} {v['calls']}x {fmt_ms(v['ms'])}"
+        + (f" ERR {v['errors']}" if v.get("errors") else "")
+        for k, v in sorted(by_kind.items(), key=lambda kv: -kv[1]["ms"])
+    )
+
+
+def print_kind_summary(raw):
+    """Aggregate the per-call-kind timings across every request in the batch."""
+    totals = {}
+    for rec in raw:
+        by_kind = ((rec.get("response") or {}).get("metrics") or {}).get("by_kind") or {}
+        for k, v in by_kind.items():
+            t = totals.setdefault(k, {"calls": 0, "ms": 0.0, "errors": 0})
+            t["calls"] += v.get("calls") or 0
+            t["ms"] += v.get("ms") or 0.0
+            t["errors"] += v.get("errors") or 0
+    if not totals:
+        print("\n(No per-kind metrics returned — is the backend running this build?)")
+        return
+
+    print("\n=== Latency by call kind ===")
+    print(f"{'kind':<20}{'calls':>7}{'total':>12}{'avg/call':>12}{'errors':>8}")
+    for k, t in sorted(totals.items(), key=lambda kv: -kv[1]["ms"]):
+        avg = t["ms"] / t["calls"] if t["calls"] else 0
+        print(f"{k:<20}{t['calls']:>7}{fmt_ms(t['ms']):>12}"
+              f"{fmt_ms(avg):>12}{t['errors']:>8}")
+    print("Concurrent calls are summed, so totals can exceed wall-clock time — "
+          "compare kinds against each other, not against elapsed.")
+
+
 def load_requests(files):
     files = files or sorted(glob.glob("examples/*.json") + glob.glob("examples/*.jsonl"))
     out = []
@@ -92,7 +142,7 @@ def main(argv=None):
 
     for fname, payload in reqs:
         prompt = payload.get("prompt") or payload.get("question") or ""
-        print(f"-> {fname}: {prompt[:60]}")
+        print(f"-> {fname}")
         started = time.perf_counter()
         try:
             body = {"prompt": prompt, "language": payload.get("language")}
@@ -111,7 +161,10 @@ def main(argv=None):
         tools = [t.get("tool") for t in data.get("trace", [])]
         srcs = data.get("sources", [])
         print(f"   done in {elapsed}s — {len(tools)} tool call(s), {len(srcs)} source(s), "
-              f"completeness_calls={m.get('completeness_calls')}")
+              f"{m.get('llm_calls')} llm call(s), {m.get('total_tokens') or 0} tok")
+        breakdown = kind_line(m.get("by_kind"))
+        if breakdown:
+            print(f"   {breakdown}")
 
         raw.append({"file": fname, "request": payload,
                     "elapsed_s": elapsed, "response": data})
@@ -119,6 +172,7 @@ def main(argv=None):
     with open(json_path, "w", encoding="utf-8") as jf:
         json.dump(raw, jf, ensure_ascii=False, indent=2)
 
+    print_kind_summary(raw)
     print(f"\nSaved -> {json_path}")
 
 
