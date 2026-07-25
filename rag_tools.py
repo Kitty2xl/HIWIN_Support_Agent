@@ -141,6 +141,8 @@ async def _run_vision_analysis(query: str, passages: list) -> str:
             [{"role": "user", "content": content}],
             config.LANGUAGE_MODEL,
             120,  # vision calls need more time than text-only
+            None,
+            "vision",
         )
     except Exception as e:
         print(f"Vision analysis failed: {e}")
@@ -240,7 +242,8 @@ async def _grade_passage(query: str, text: str) -> bool:
     }]
     try:
         answer = await asyncio.to_thread(
-            inference.chat_content, messages, config.LANGUAGE_MODEL, config.GRADING_TIMEOUT
+            inference.chat_content, messages, config.LANGUAGE_MODEL,
+            config.GRADING_TIMEOUT, None, "grading",
         )
         return answer.strip().upper().startswith("Y")
     except Exception as e:

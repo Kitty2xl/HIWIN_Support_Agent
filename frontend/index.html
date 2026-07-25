@@ -137,6 +137,19 @@ function renderDebug(data) {
     + kv('latency', (m.latency_ms != null ? m.latency_ms + ' ms' : '—'))
     + '</div>';
 
+  // Where the wall clock actually went, per call kind (agent loop vs. vision vs.
+  // completeness vs. embed/rerank). Concurrent calls are summed, so these can
+  // total more than latency — read them against each other, not against latency.
+  const byKind = m.by_kind || {};
+  const kinds = Object.keys(byKind).sort((a, b) => byKind[b].ms - byKind[a].ms);
+  if (kinds.length) {
+    html += '<div class="dbg-metrics">' + kinds.map((k) => {
+      const s = byKind[k];
+      const err = s.errors ? ' ⚠' + s.errors : '';
+      return kv(k, s.calls + '× ' + Math.round(s.ms) + ' ms' + err);
+    }).join('') + '</div>';
+  }
+
   if (!trace.length) {
     html += '<p class="dbg-empty">No tool calls were made for this request.</p>';
   } else {

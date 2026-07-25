@@ -8,7 +8,6 @@ the final assistant message.
 
 import asyncio
 import json
-import time
 
 import config
 import inference
@@ -58,6 +57,24 @@ async def _run_tool(name: str, args: dict):
     return (result if isinstance(result, str) else str(result)), []
 
 
+# Global bound on concurrent completeness enumerations, created lazily so it
+# binds to the running loop. It MUST be shared across every _enumerate_passages
+# call: in pre_draft mode there is one call per tool call, and those run
+# concurrently, so a per-invocation semaphore would silently multiply the limit
+# by the number of in-flight tool calls — exactly what this bound exists to stop.
+_ENUM_SEM: asyncio.Semaphore | None = None
+_ENUM_SEM_LOOP = None
+
+
+def _enum_semaphore() -> asyncio.Semaphore:
+    global _ENUM_SEM, _ENUM_SEM_LOOP
+    loop = asyncio.get_running_loop()
+    if _ENUM_SEM is None or _ENUM_SEM_LOOP is not loop:
+        _ENUM_SEM = asyncio.Semaphore(max(1, config.COMPLETENESS_CONCURRENCY))
+        _ENUM_SEM_LOOP = loop
+    return _ENUM_SEM
+
+
 async def _enumerate_passage(question: str, passage: str, sem: asyncio.Semaphore) -> str:
     """Re-read ONE passage in isolation and exhaustively list every entry in it
     that matches the user's request. The narrow scope is the point: a focused
@@ -89,7 +106,7 @@ async def _enumerate_passage(question: str, passage: str, sem: asyncio.Semaphore
             out = await asyncio.to_thread(
                 inference.chat_content, messages,
                 config.COMPLETENESS_MODEL, config.COMPLETENESS_TIMEOUT,
-                config.COMPLETENESS_BASE_URL,
+                config.COMPLETENESS_BASE_URL, "completeness_enum",
             )
             return (out or "").strip()
         except Exception as e:
@@ -110,7 +127,7 @@ async def _enumerate_passages(question: str, passages: list) -> tuple[list, int,
     if not uniq:
         return [], 0, []
 
-    sem = asyncio.Semaphore(max(1, config.COMPLETENESS_CONCURRENCY))
+    sem = _enum_semaphore()
     enums = await asyncio.gather(*(_enumerate_passage(question, p, sem) for p in uniq))
     calls = len(uniq)
 
@@ -169,7 +186,8 @@ async def _completeness_pass(question: str, draft: str, passages: list) -> tuple
     }]
     try:
         merged = await asyncio.to_thread(
-            inference.chat_content, messages, config.LANGUAGE_MODEL, config.CHAT_TIMEOUT
+            inference.chat_content, messages, config.LANGUAGE_MODEL,
+            config.CHAT_TIMEOUT, None, "completeness_merge",
         )
         return (merged or draft), calls + 1, details
     except Exception as e:
@@ -184,29 +202,37 @@ async def run(system: str, user_msg: str, trace: list = None,
         {"role": "user", "content": user_msg},
     ]
 
-    generations: list = []   # one entry per LLM generation call (timing + tokens)
+    # Every call made through `inference` during this request lands here — the
+    # agent loop AND the vision / completeness / embed / rerank work underneath
+    # it, which used to go untimed and hid most of a slow request.
+    generations: list = inference.start_recording()
     iterations = 0
     tool_calls_count = 0
     completeness_calls = 0
     completeness_details: list = []   # per-passage enumeration outcome (debug)
     retrieved_passages: list = []   # individual source passages, for the completeness pass
 
-    def _record(data: dict, t0: float):
-        usage = data.get("usage") or {}
-        generations.append({
-            "duration_ms": round((time.perf_counter() - t0) * 1000, 1),
-            "prompt_tokens": usage.get("prompt_tokens"),
-            "completion_tokens": usage.get("completion_tokens"),
-        })
-
     def _finalize():
         if metrics is None:
             return
-        p = sum(g["prompt_tokens"] or 0 for g in generations)
-        c = sum(g["completion_tokens"] or 0 for g in generations)
+        p = sum(g.get("prompt_tokens") or 0 for g in generations)
+        c = sum(g.get("completion_tokens") or 0 for g in generations)
+        # Latency attribution: which stage actually consumed the wall clock.
+        # Note the per-kind totals SUM concurrent calls, so they exceed latency_ms
+        # whenever calls overlap — compare kinds against each other, not against
+        # end-to-end latency.
+        by_kind: dict = {}
+        for g in generations:
+            k = by_kind.setdefault(g["kind"], {"calls": 0, "ms": 0.0, "errors": 0})
+            k["calls"] += 1
+            k["ms"] = round(k["ms"] + g["duration_ms"], 1)
+            if g.get("error"):
+                k["errors"] += 1
         metrics.update({
             "generations": generations,
-            "llm_calls": len(generations),
+            "by_kind": by_kind,
+            "llm_calls": sum(1 for g in generations
+                             if g["kind"] not in inference.NON_GENERATION_KINDS),
             "completeness_calls": completeness_calls,
             "completeness": completeness_details,
             "agent_iterations": iterations,
@@ -219,9 +245,7 @@ async def run(system: str, user_msg: str, trace: list = None,
     for _ in range(config.MAX_AGENT_ITERS):
         iterations += 1
         _trim_tool_history(messages, config.KEEP_RECENT_TOOL_RESULTS)
-        t0 = time.perf_counter()
         data = await asyncio.to_thread(inference.chat, messages, TOOL_SCHEMAS)
-        _record(data, t0)
         msg = data["choices"][0]["message"]
         messages.append(_assistant_msg(msg))
 
@@ -313,8 +337,8 @@ async def run(system: str, user_msg: str, trace: list = None,
 
     # Iteration cap hit — force a final answer with tools disabled.
     _trim_tool_history(messages, config.KEEP_RECENT_TOOL_RESULTS)
-    t0 = time.perf_counter()
-    data = await asyncio.to_thread(inference.chat, messages)
-    _record(data, t0)
+    data = await asyncio.to_thread(
+        inference.chat, messages, None, None, None, None, "agent_final"
+    )
     _finalize()
     return data["choices"][0]["message"].get("content") or ""
