@@ -11,7 +11,8 @@
 > **接手這個專案？從這裡開始。**
 > 1. 先讀 [§2 各部件如何串接](#2-各部件如何串接)——三個設定檔必須一致，多數問題都是其中之一寫錯。
 > 2. 執行 `python doctor.py --all`——它檢查整個堆疊並明確指出該修什麼。
-> 3. 日常工作（調整答覆、新增 PDF、備份）請看 [docs/MAINTENANCE.zh-Hant.md](docs/MAINTENANCE.zh-Hant.md)。
+> 3. 日常工作（調整答覆、新增 PDF、備份）請看 [docs/MAINTENANCE.zh-Hant.md](docs/MAINTENANCE.zh-Hant.md)；
+>    只想照步驟操作的人請看 [docs/操作手冊.md](docs/操作手冊.md)。
 > 4. [AGENTS.md](AGENTS.md) 是給 AI 程式代理與新開發者的精簡簡報；[docs/ARCHITECTURE.zh-Hant.md](docs/ARCHITECTURE.zh-Hant.md) 說明設計。
 
 ---

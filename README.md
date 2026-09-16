@@ -13,7 +13,8 @@ catalogues, so one repo covers both *building* and *serving*.
 > **Inherited this project? Start here.**
 > 1. Read [§2 How the pieces fit](#2-how-the-pieces-fit) — three config files must agree, and most problems are one of them being wrong.
 > 2. Run `python doctor.py --all` — it checks the whole stack and tells you exactly what to fix.
-> 3. For everyday work (tuning answers, adding PDFs, backups) read [docs/MAINTENANCE.md](docs/MAINTENANCE.md).
+> 3. For everyday work (tuning answers, adding PDFs, backups) read [docs/MAINTENANCE.md](docs/MAINTENANCE.md);
+>    a step-by-step operator's manual in Traditional Chinese is [docs/操作手冊.md](docs/操作手冊.md).
 > 4. [AGENTS.md](AGENTS.md) is a condensed brief for AI coding agents and new developers; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the design.
 
 ---
