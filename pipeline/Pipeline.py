@@ -6,6 +6,12 @@ import yaml
 import threading
 import json
 import logging
+import sys
+# Make `core` / `pdf_passes` / `ingestion` importable no matter which folder this
+# file is launched from (it used to require the working directory to be pipeline/).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
@@ -811,7 +817,7 @@ def run_pipeline(progress_queue=None, stop_event=None):
         print(f"Pipeline — {len(pdf_tasks)} PDF(s)")
         print(f"  Pass 1 batch size  : {BATCH_SIZE_PASS_1} pages")
         print(f"  Pass 2/2b/3 workers: {CONCURRENCY} concurrent async workers (shared client)")
-        print(f"  GPU model phasing  : Pass34 (Phase A) → Pass5Ingest (Phase B)")
+        print("  GPU model phasing  : Pass34 (Phase A) → Pass5Ingest (Phase B)")
         print("=" * 70 + "\n")
 
     # ── Phases A + B (pipelined) ──────────────────────────────────────────

@@ -71,6 +71,7 @@ SCHEMA: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("MODEL_PASS_3",  "Pass 3 model (table → markdown)",  "str"),
         ("MODEL_PASS_3B", "Pass 3b model (table summary)",   "str"),
         ("MODEL_PASS_4",  "Pass 4 model (validation)",       "str"),
+        ("EMBED_MODEL",   "Embedding model (ingest; = backend EMBEDDING_MODEL)", "str"),
     ]),
     ("Pass 1 — layout detection", [
         ("SCORE_THRESHOLD",   "Detection confidence (0–1)", "float"),

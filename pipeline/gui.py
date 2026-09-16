@@ -22,6 +22,13 @@ import time
 import yaml
 from datetime import datetime
 
+import sys
+# Make `core` / `pdf_passes` / `ingestion` importable no matter which folder this
+# file is launched from (it used to require the working directory to be pipeline/).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
 from core.config import (
     THEMES, DEFAULT_THEME,
     I_PENDING, I_RUNNING, I_DONE, I_SKIP, I_ERROR,

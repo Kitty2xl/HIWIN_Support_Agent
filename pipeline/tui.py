@@ -25,6 +25,12 @@ import threading
 from collections import deque
 from datetime import datetime
 
+# Make `core` / `pdf_passes` / `ingestion` importable no matter which folder this
+# file is launched from (it used to require the working directory to be pipeline/).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
 try:
     from rich.console import Console, Group
     from rich.table import Table

@@ -171,6 +171,8 @@ FIELDS = {
     "MODEL_PASS_3":        {"en": "Pass 3 model (table → markdown)", "tc": "Pass 3 模型（表格 → markdown）"},
     "MODEL_PASS_3B":       {"en": "Pass 3b model (table summary)", "tc": "Pass 3b 模型（表格摘要）"},
     "MODEL_PASS_4":        {"en": "Pass 4 model (validation)", "tc": "Pass 4 模型（驗證）"},
+    "EMBED_MODEL":         {"en": "Embedding model (ingest; = backend EMBEDDING_MODEL)",
+                            "tc": "向量化模型（匯入用；須等於後端 EMBEDDING_MODEL）"},
     "SCORE_THRESHOLD":     {"en": "Detection confidence (0–1)", "tc": "偵測信心度（0–1）"},
     "PASS_1_RENDER_DPI":   {"en": "Render DPI", "tc": "渲染 DPI"},
     "BATCH_SIZE_PASS_1":   {"en": "Pages per batch", "tc": "每批頁數"},

@@ -3,6 +3,13 @@ import re
 import json
 import shutil
 from datetime import datetime, timezone
+import sys
+
+# Make `core` importable when this file is run directly from any folder
+# (`python -m ingestion.Ingest` from pipeline/ also works, as before).
+_PIPELINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PIPELINE_DIR not in sys.path:
+    sys.path.insert(0, _PIPELINE_DIR)
 
 import psycopg2
 from psycopg2 import pool as pg_pool
@@ -16,7 +23,7 @@ from llama_index.embeddings.openai_like import OpenAILikeEmbedding
 
 from core.config import (
     ROOT_PATH, FINAL_OUTPUT_ROOT, IMAGE_TARGET_ROOT, PROCESS_ROOT,
-    LLM_BASE_URL, LLM_API_KEY,
+    LLM_BASE_URL, LLM_API_KEY, EMBED_MODEL,
     DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT, EMBED_DIM, DB_SCHEMA,
     EMBED_BATCH_SIZE, INGEST_BY_PAGE,
 )
@@ -123,7 +130,8 @@ def delete_existing_nodes(table_name: str, file_name: str) -> int:
     return deleted
 
 def run_ingestion_stage(checkpoint_manager=None, doc_checkpoint_map=None,
-                        force: bool = False, skip_asset_copy: bool = False) -> None:
+                        force: bool = False, skip_asset_copy: bool = False,
+                        assets_only: bool = False) -> None:
     """Run the RAG ingestion pipeline (Phase 7).
 
     Scans Final_Output for markdown files, migrates assets to the web
@@ -147,6 +155,11 @@ def run_ingestion_stage(checkpoint_manager=None, doc_checkpoint_map=None,
                           text points at assets served separately.  Use this when
                           the assets are already in place (the old ingest_db.py
                           behavior).
+    assets_only          — the opposite: ONLY copy Figures/Tables from Final_Output
+                          into IMAGE_TARGET_ROOT and stop. No embedding, no DB
+                          writes. Use it to (re)populate the image folder the
+                          backend serves at /static/HIWIN, e.g. on a new machine
+                          after restoring the database from a dump.
     """
 
     if checkpoint_manager is None:
@@ -248,18 +261,25 @@ def run_ingestion_stage(checkpoint_manager=None, doc_checkpoint_map=None,
         })
 
 
+    if assets_only:
+        n_docs = sum(len(v) for v in processed_md_files_by_table.values())
+        print(f"\nAssets copied into {IMAGE_TARGET_ROOT} for {n_docs} document(s). "
+              "No database writes (--assets-only).")
+        return
+
     # ---------------------------------------------------------
     # PHASE 3: INITIALISE API MODELS
     # ---------------------------------------------------------
     print("\nConnecting to Local API Models (Embeddings & LLM)...")
 
-    # NOTE: if you change this embedding model, its output dimension probably
-    # changes too — update EMBED_DIM in core/config.py to match and rebuild the
-    # DB table, or pgvector inserts will fail (dimension mismatch).
+    # NOTE: EMBED_MODEL (settings.json / core/config.py) must be the SAME router
+    # model the backend queries with (.env EMBEDDING_MODEL). If you change it, its
+    # output dimension probably changes too — update EMBED_DIM in core/config.py
+    # and rebuild every data_* table, or pgvector inserts fail (dimension mismatch).
     embed_model = OpenAILikeEmbedding(
         api_base=LLM_BASE_URL,
         api_key=LLM_API_KEY,
-        model_name="Embedding_Qwen3.6",
+        model_name=EMBED_MODEL,
         timeout=120000,
         embed_batch_size=EMBED_BATCH_SIZE,
     )
@@ -467,9 +487,15 @@ if __name__ == "__main__":
              "rewritten to their web URLs.",
     )
     parser.add_argument(
+        "--assets-only", action="store_true",
+        help="Only copy Figures/Tables from Final_Output into IMAGE_TARGET_ROOT "
+             "(the folder the backend serves at /static/HIWIN); no embedding, no DB.",
+    )
+    parser.add_argument(
         "--force", action="store_true",
         help="Re-ingest even documents already marked 'ingest' in the checkpoint.",
     )
     args = parser.parse_args()
 
-    run_ingestion_stage(force=args.force, skip_asset_copy=args.db_only)
+    run_ingestion_stage(force=args.force, skip_asset_copy=args.db_only,
+                        assets_only=args.assets_only)

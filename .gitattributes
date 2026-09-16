@@ -1,0 +1,20 @@
+# Normalise line endings so the repo works when cloned OR copied between Windows and Linux.
+# Shell scripts MUST stay LF (a CRLF start.sh fails on Linux with "/usr/bin/env: 'bash\r'"),
+# batch files MUST stay CRLF (cmd.exe misparses LF-only labels).
+* text=auto
+*.sh   text eol=lf
+*.py   text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.ini  text eol=lf
+*.yaml text eol=lf
+*.jinja text eol=lf
+.env   text eol=lf
+*.bat  text eol=crlf
+*.gguf binary
+*.onnx binary
+*.png  binary
+*.jpg  binary
+*.txt  text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf

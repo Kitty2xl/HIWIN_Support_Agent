@@ -12,7 +12,7 @@ python-dotenv
 # serve /chat. Kept here (merged) so one `pip install -r requirements.txt`
 # provisions both halves.
 numpy
-opencv-python
+opencv-python-headless   # headless: no libGL needed on Linux servers; same cv2 API
 PyMuPDF
 onnxruntime
 openai

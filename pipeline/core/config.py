@@ -35,6 +35,10 @@ MODEL_PASS_2B = "RAG_Pipeline_Pass34"   # figure captioning — same model as Pa
 MODEL_PASS_3  = "RAG_Pipeline_Pass34"
 MODEL_PASS_3B = "RAG_Pipeline_Pass5Ingest"  # table summarisation — text-only, same as Pass 4
 MODEL_PASS_4  = "RAG_Pipeline_Pass5Ingest"
+# Embedding model the INGEST step calls (router section name). It MUST be the same
+# model the backend queries with (.env EMBEDDING_MODEL) and its output dimension
+# MUST equal EMBED_DIM below - vectors from two different models are not comparable.
+EMBED_MODEL   = os.environ.get("EMBED_MODEL", "Embedding_Qwen3.6")
 
 # =====================================================================
 # PASS 1 (layout detection)
