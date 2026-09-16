@@ -76,6 +76,7 @@ guessing before running it.
 | Which PDFs / pages are ingested | `<ROOT_PATH>/PDF_Config.yaml` |
 | Chunking (per page vs per section) | `settings.json` `INGEST_BY_PAGE` |
 | The demo page | `frontend/index.html` (illustrative only; the product is the API) |
+| Frontend integration (CORS, absolute image URLs) | `.env` `CORS_ALLOW_ORIGINS`, `PUBLIC_BASE_URL`; contract in `docs/API.md` |
 
 ## 5. How to verify a change
 

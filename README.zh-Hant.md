@@ -369,6 +369,8 @@ dump 也是正確的每日備份方式。管線雖能從 PDF 重建資料庫，�
 | `CHAT_TIMEOUT` | `120`（版控：`30000`） | 每次呼叫逾時（秒）。刻意設很大：冷載入與長列舉不可被中斷。 |
 | `MAX_AGENT_ITERS` | `8` | 每請求的工具呼叫回合上限。 |
 | `CHAT_LOG_ENABLED` / `CHAT_LOG_SCHEMA` / `CHAT_LOG_TABLE` | `true` / `hiwin_cs_db` / `chat_logs` | 對話記錄（見 §11）。 |
+| `CORS_ALLOW_ORIGINS` | `*` | 允許從瀏覽器呼叫 API 的來源（逗號分隔）；空白則不送 CORS 標頭。見 [docs/API.zh-Hant.md](docs/API.zh-Hant.md)。 |
+| `PUBLIC_BASE_URL` | *（空）* | 設定後（如 `http://10.0.0.5:8079`），答覆中的圖片連結變為絕對 URL，供不同來源的前端使用。 |
 
 檢索品質與速度：
 
@@ -440,6 +442,9 @@ curl -X POST http://localhost:8079/chat -H "Content-Type: application/json" \
 | `GET /` | 展示前端（`frontend/index.html`），附除錯面板。 |
 | `GET /health` | 存活檢查 → `{"status": "ok"}`。 |
 | `GET /static/HIWIN/...` | `IMAGE_STATIC_ROOT` 的圖示。 |
+
+**串接自己的前端或系統：** 完整的 API 規格、curl / JavaScript / Python / PowerShell 範例、
+CORS 與圖片網址處理，見 [docs/API.zh-Hant.md](docs/API.zh-Hant.md)。
 
 ### 批次測試與檢視
 

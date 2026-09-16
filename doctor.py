@@ -181,6 +181,8 @@ def check_env():
                         f"completeness={config.COMPLETENESS_MODEL}")
     R.info("postgres", f"{config.DB_USER}@{config.DB_HOST}:{config.DB_PORT}/{config.DB_NAME} "
                        f"schema={config.DB_SCHEMA} chat_log={config.CHAT_LOG_SCHEMA}.{config.CHAT_LOG_TABLE}")
+    R.info("frontend integration", f"CORS_ALLOW_ORIGINS={config.CORS_ALLOW_ORIGINS or '(disabled)'} "
+                                   f"PUBLIC_BASE_URL={config.PUBLIC_BASE_URL or '(relative image links)'}")
 
     # prompt assets
     if os.path.exists(config.SYSTEM_PROMPT_PATH):

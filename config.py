@@ -156,6 +156,17 @@ COMPLETENESS_BASE_URL = _env("COMPLETENESS_BASE_URL", INFERENCE_BASE_URL)
 COMPLETENESS_MODE     = _env("COMPLETENESS_MODE", "post_draft")
 
 
+# --- Serving a separate frontend (API-first deployment) ---
+# Browsers block cross-origin calls unless the backend sends CORS headers. A
+# comma-separated list of allowed origins, e.g. "http://10.0.0.5:3000,https://support.example.com";
+# "*" allows any origin (fine on an internal network); empty string disables CORS.
+CORS_ALLOW_ORIGINS = _env("CORS_ALLOW_ORIGINS", "*")
+# Answers contain root-relative image links (/static/HIWIN/...) and certificate
+# web_paths that only resolve when the page is served by THIS backend. Set this to
+# the URL clients reach the backend at (e.g. http://10.0.0.5:8079) and every such
+# link in /chat responses is rewritten to an absolute URL. Empty = leave as-is.
+PUBLIC_BASE_URL = _env("PUBLIC_BASE_URL", "").rstrip("/")
+
 # --- Chat logging ---
 # Persist each /chat request (prompt, answer, sources, trace, timing & token
 # metrics) to a table. Stored in a SEPARATE schema in the same database, so it's

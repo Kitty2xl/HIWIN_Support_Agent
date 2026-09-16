@@ -15,6 +15,7 @@ import time
 from typing import List, Optional
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -25,6 +26,14 @@ import db
 import prompts
 
 app = FastAPI(title="HIWIN Support Agent Backend")
+
+# CORS: let a frontend served from another origin call /chat directly from the
+# browser (see docs/API.md). Disabled when CORS_ALLOW_ORIGINS is empty.
+_origins = [o.strip() for o in config.CORS_ALLOW_ORIGINS.split(",") if o.strip()]
+if _origins:
+    app.add_middleware(
+        CORSMiddleware, allow_origins=_origins, allow_methods=["*"], allow_headers=["*"],
+    )
 
 # Serve the HIWIN image assets so the markdown `![](/static/HIWIN/...)` links in
 # responses (and the cert `web_path`s in sources) actually resolve — this is the
@@ -65,6 +74,21 @@ def build_user_message(prompt: str, language: str) -> str:
 # Paired with the System_prompt 'Citation Fidelity' rule, which makes the model
 # cite the page from each passage's [SOURCE: … page=N …] tag.
 _CITED_PAGE_RE = re.compile(r"(?:page|p\.)\s*(\d+)", re.IGNORECASE)
+
+
+def absolutize_links(answer: str, sources: List[dict]) -> str:
+    """When PUBLIC_BASE_URL is set, turn the root-relative /static/HIWIN/... image
+    links in the answer (and certificate web_paths in sources) into absolute URLs so
+    a frontend on another origin can display them without a reverse proxy."""
+    base = config.PUBLIC_BASE_URL
+    if not base:
+        return answer
+    answer = (answer or "").replace("](/static/HIWIN/", f"]({base}/static/HIWIN/")
+    for s in sources:
+        wp = s.get("web_path")
+        if isinstance(wp, str) and wp.startswith("/static/"):
+            s["web_path"] = base + wp
+    return answer
 
 
 def prune_sources_to_cited(answer: str, sources: List[dict]) -> List[dict]:
@@ -117,6 +141,7 @@ async def chat(req: ChatRequest):
     # Keep only the sources the answer actually cites (the full retrieval is
     # still visible per-tool in `trace` for debugging).
     sources = prune_sources_to_cited(answer, sources)
+    answer = absolutize_links(answer, sources)
 
     # Persist the exchange (best-effort; never blocks or breaks the response).
     if config.CHAT_LOG_ENABLED:

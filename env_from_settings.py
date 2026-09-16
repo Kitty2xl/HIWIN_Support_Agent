@@ -75,6 +75,10 @@ IMAGE_STATIC_ROOT={IMAGE_STATIC_ROOT}
 # --- Chat logging ---
 CHAT_LOG_ENABLED=true
 
+# --- Separate frontend (see docs/API.md) ---
+CORS_ALLOW_ORIGINS=*
+PUBLIC_BASE_URL=
+
 # --- Answer quality / latency tuning (backend only; see README "Configuration") ---
 COMPLETENESS_PASS_ENABLED=true
 COMPLETENESS_MODE=pre_draft

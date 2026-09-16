@@ -410,6 +410,8 @@ backend-only tuning. The committed file is the production configuration.
 | `CHAT_TIMEOUT` | `120` (committed: `30000`) | Per-call timeout (s). Large on purpose: cold loads and long enumerations must not be cut. |
 | `MAX_AGENT_ITERS` | `8` | Max tool-calling rounds per request. |
 | `CHAT_LOG_ENABLED` / `CHAT_LOG_SCHEMA` / `CHAT_LOG_TABLE` | `true` / `hiwin_cs_db` / `chat_logs` | Chat logging (see §11). |
+| `CORS_ALLOW_ORIGINS` | `*` | Browser origins allowed to call the API (comma-separated); empty disables CORS. See [docs/API.md](docs/API.md). |
+| `PUBLIC_BASE_URL` | *(empty)* | If set (e.g. `http://10.0.0.5:8079`), image links in answers become absolute URLs for frontends on another origin. |
 
 Retrieval quality vs. speed:
 
@@ -486,6 +488,10 @@ curl -X POST http://localhost:8079/chat -H "Content-Type: application/json" \
 | `GET /` | Demo frontend (`frontend/index.html`) with a debug panel. |
 | `GET /health` | Liveness → `{"status": "ok"}`. |
 | `GET /static/HIWIN/...` | Figures from `IMAGE_STATIC_ROOT`. |
+
+**Integrating your own frontend or service:** the complete API contract, examples
+in curl / JavaScript / Python / PowerShell, CORS and image-URL handling are in
+[docs/API.md](docs/API.md).
 
 ### Batch runner and inspection
 

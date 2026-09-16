@@ -1,5 +1,5 @@
 // Regenerate docs/操作手冊.docx from docs/操作手冊.md after editing the markdown:
-//     npm install docx        (once, anywhere; or run from a folder that has it)
+//     npm install docx        (once; if it is installed elsewhere: set NODE_PATH=<that>/node_modules)
 //     node docs/md2docx.js docs/操作手冊.md docs/操作手冊.docx
 // Handles the markdown subset the manual uses: headings, paragraphs, bullet and
 // numbered lists (with nested code blocks), tables, fenced code, blockquotes, links.
