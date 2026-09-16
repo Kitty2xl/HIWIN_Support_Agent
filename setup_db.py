@@ -31,6 +31,14 @@ import platform
 import sys
 
 import psycopg2
+
+# Console-safe output on every OS (a Windows console/redirect with a legacy code page
+# such as cp950 would otherwise raise UnicodeEncodeError on non-ASCII text).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from psycopg2 import sql
 
 import config

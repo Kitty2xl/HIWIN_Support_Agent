@@ -201,3 +201,4 @@ ALTER USER postgres WITH PASSWORD 'new-password';
 | 2026-08-28 | 向量化／reranker／aux 的 `parallel = 1` | 相同請求在不同 slot 回傳不同向量；排名飄移 |
 | 2026-09-11/13 | 所有資料表的 `bak_data_*` 快照 | 進一步批次修復前 |
 | 2026-09-16 | 交接稽核：`doctor.py`、`setup_db.py`、就地更新的 `env_from_settings.py`、`--assets-only`、`EMBED_MODEL` 設定、`.gitattributes`、headless OpenCV、文件重寫 | 讓新人能在 Windows 或 Linux 上重建本專案 |
+| 2026-09-16 | 從全新 clone 模擬新人重建（2 頁 PDF → `hiwin_rag_sim`）：啟動腳本在 Python 不在 PATH 時也能找到、設定 `CUDA_DEVICE_ORDER=PCI_BUS_ID`、等待模型載入完成；管線輸出強制 UTF-8（最後的 emoji 在 cp950 上當掉）；改用 `import pymupdf`；doctor 對被擠掉／載入中的模型提出警告 | 路徑 C 的每一步都實際跑過，每個絆腳處都已修正 |

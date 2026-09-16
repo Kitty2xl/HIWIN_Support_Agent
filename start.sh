@@ -18,11 +18,14 @@ LLAMA_SERVER="${LLAMA_SERVER:-/path/to/llama/llama-server}"
 PRESET="${PRESET:-./config.ini}"
 ROUTER_HOST="${ROUTER_HOST:-127.0.0.1}"
 ROUTER_PORT="${ROUTER_PORT:-11400}"
-# How many models may be resident at once. 4 = the serving set; use 6 to keep the
-# two pipeline models loaded as well while ingesting (needs the VRAM).
+# How many models may be resident at once. 4 = the serving set. When the
+# pipeline runs, its two models evict the least-recently-used serving models
+# (they reload on the next /chat). Raise to 6 only if the VRAM allows it.
 MODELS_MAX="${MODELS_MAX:-4}"
 # Which GPU(s) the router may use. On a shared multi-GPU box pin ONE card
-# (index from nvidia-smi); export CUDA_VISIBLE_DEVICES="" to let llama.cpp use all.
+# (index as shown by nvidia-smi); export CUDA_VISIBLE_DEVICES="" to let llama.cpp
+# use all. PCI_BUS_ID makes CUDA index N == nvidia-smi index N.
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES-0}"
 # ----------------------------------------------------------------------
 
@@ -33,9 +36,14 @@ if [ ! -x "$LLAMA_SERVER" ]; then
 fi
 command -v curl >/dev/null || { echo "ERROR: curl is required (apt install curl)"; exit 1; }
 
+# Find Python 3.12 (override with PYTHON=/path/to/python3.12).
+PYTHON="${PYTHON:-$(command -v python3.12 || command -v python3 || command -v python || true)}"
+if [ -z "$PYTHON" ]; then
+  echo "ERROR: no python3 found. Ubuntu/Debian: sudo apt install python3.12 python3.12-venv"; exit 1
+fi
 if [ ! -d ".venv" ]; then
-  echo "Creating virtual environment..."
-  python3 -m venv .venv || {
+  echo "Creating virtual environment with $PYTHON ..."
+  "$PYTHON" -m venv .venv || {
     echo "ERROR: could not create a venv. On Debian/Ubuntu: sudo apt install python3.12-venv (or python3-venv)."
     exit 1
   }
@@ -56,7 +64,7 @@ echo "Starting llama.cpp router on ${ROUTER_HOST}:${ROUTER_PORT} (preset ${PRESE
 ROUTER_PID=$!
 trap 'kill "$ROUTER_PID" 2>/dev/null' EXIT
 
-# 2. Wait for the router to answer.
+# 2. Wait for the router to answer, then for its models to finish loading.
 echo -n "Waiting for the router to come up"
 until curl -sf "http://${ROUTER_HOST}:${ROUTER_PORT}/v1/models" >/dev/null 2>&1; do
   if ! kill -0 "$ROUTER_PID" 2>/dev/null; then
@@ -65,7 +73,8 @@ until curl -sf "http://${ROUTER_HOST}:${ROUTER_PORT}/v1/models" >/dev/null 2>&1;
   echo -n "."
   sleep 2
 done
-echo " up (models load in the background via load-on-startup)."
+echo " answering; waiting for the load-on-startup models to finish loading (about a minute)..."
+python doctor.py --wait-models || true
 
 # 3. Preflight (warn only; the backend starts regardless).
 echo

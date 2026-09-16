@@ -470,7 +470,15 @@ def check_inference(config, live: bool, db_dim):
         if name in models:
             status = models[name].get("status")
             st = status.get("value") if isinstance(status, dict) else status
-            R.ok(f"{key} = {name}", f"status: {st}" if st else None)
+            if st in ("loading", "unloaded"):
+                R.warn(f"{key} = {name} is {st}", None,
+                       "the router answers before its models finish loading (~1 min for the full set); "
+                       "wait, or run `python doctor.py --wait-models`. `unloaded` for a load-on-startup model "
+                       "means it was evicted (raise MODELS_MAX / --models-max) or failed to load (see the router log)")
+            elif st and st not in ("loaded",):
+                R.fail(f"{key} = {name} status: {st}", None, "check the router log for the load error (VRAM, wrong path)")
+            else:
+                R.ok(f"{key} = {name}", f"status: {st}" if st else None)
         else:
             R.fail(f"{key} = {name} is not served", None,
                    "the name must equal a [section] in the preset the router was started with")
@@ -612,12 +620,71 @@ def check_pipeline(config, ini_sections: set, db_dim):
 
 # --------------------------------------------------------------------------- #
 
+def wait_models(timeout_s: int) -> int:
+    """Block until every load-on-startup model in the preset reports `loaded` (used by the
+    launchers so the backend does not start against half-loaded models)."""
+    import time
+    import requests
+    import config
+    path = os.environ.get("PRESET") or os.path.join(BASE_DIR, "config.ini")
+    wanted = []
+    if os.path.exists(path):
+        cp = load_preset(path)
+        wanted = [s for s in cp.sections() if s not in ("__top__", "*")
+                  and (cp.get(s, "load-on-startup", fallback="") or "").strip().lower() in ("true", "1", "on", "yes")]
+    url = f"{config.INFERENCE_HOST}/v1/models"
+    t0 = time.time()
+    last = ""
+    unloaded_since: dict = {}   # an evicted model never comes back by itself - stop waiting on it
+    while time.time() - t0 < timeout_s:
+        try:
+            data = requests.get(url, timeout=5).json().get("data", [])
+        except Exception as e:  # noqa: BLE001
+            print(f"waiting for the router at {url} ({e.__class__.__name__}) ...")
+            time.sleep(3)
+            continue
+        st = {}
+        for m in data:
+            s = m.get("status")
+            st[m.get("id")] = s.get("value") if isinstance(s, dict) else (s or "?")
+        now = time.time()
+        for n in wanted:
+            if st.get(n) == "unloaded":
+                unloaded_since.setdefault(n, now)
+            else:
+                unloaded_since.pop(n, None)
+        stuck = [n for n, t in unloaded_since.items() if now - t > 30]
+        if stuck:
+            print(f"WARN: {', '.join(stuck)} stayed `unloaded` for 30 s - evicted by another model "
+                  "(raise MODELS_MAX) or never requested; it will load on first use. Continuing.")
+            return 0
+        pending = [n for n in wanted if st.get(n) != "loaded"]
+        failed = [n for n in wanted if st.get(n) not in (None, "loaded", "loading", "unloaded")]
+        line = ", ".join(f"{n}={st.get(n, 'missing')}" for n in wanted) or "(no load-on-startup models in preset)"
+        if line != last:
+            print(line)
+            last = line
+        if failed:
+            print(f"FAIL: model(s) failed to load: {', '.join(failed)} - see the router log")
+            return 1
+        if not pending:
+            print(f"all load-on-startup models loaded ({int(time.time() - t0)} s)")
+            return 0
+        time.sleep(3)
+    print(f"WARN: still loading after {timeout_s} s: {', '.join(pending)} - continuing")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="Preflight checks for the HIWIN Support Agent.")
+    ap.add_argument("--wait-models", action="store_true",
+                    help="only wait until every load-on-startup model in config.ini reports loaded (max 20 min)")
     ap.add_argument("--pipeline", action="store_true", help="also check the ingestion pipeline setup")
     ap.add_argument("--live", action="store_true", help="also make real embed / rerank / chat calls")
     ap.add_argument("--all", action="store_true", help="--pipeline --live")
     args = ap.parse_args()
+    if args.wait_models:
+        return wait_models(1200)
     pipeline = args.pipeline or args.all
     live = args.live or args.all
 

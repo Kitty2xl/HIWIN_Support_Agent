@@ -6,9 +6,14 @@
 set -e
 cd "$(dirname "$0")"
 
+# Find Python 3.12 (override with PYTHON=/path/to/python3.12).
+PYTHON="${PYTHON:-$(command -v python3.12 || command -v python3 || command -v python || true)}"
+if [ -z "$PYTHON" ]; then
+  echo "ERROR: no python3 found. Ubuntu/Debian: sudo apt install python3.12 python3.12-venv"; exit 1
+fi
 if [ ! -d ".venv" ]; then
-  echo "Creating virtual environment..."
-  python3 -m venv .venv || {
+  echo "Creating virtual environment with $PYTHON ..."
+  "$PYTHON" -m venv .venv || {
     echo "ERROR: could not create a venv. On Debian/Ubuntu: sudo apt install python3.12-venv (or python3-venv)."
     exit 1
   }

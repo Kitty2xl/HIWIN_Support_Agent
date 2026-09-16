@@ -103,7 +103,9 @@ the chat log is the production record.
 
 ## 6. Live deployment facts (as of 2026-09-16, this Windows Server box)
 
-- Repo: `C:\Users\User_11\Desktop\HIWIN\HIWIN_Dem\HIWIN_Support_Agent`, venv `.venv`, Python 3.12.7.
+- Repo: `C:\Users\User_11\Desktop\HIWIN\HIWIN_Dem\HIWIN_Support_Agent`, venv `.venv`, Python 3.12.7
+  (= `C:\ProgramData\anaconda3\python.exe`; `python`/`py` are NOT on PATH here - the launchers
+  search for it, manual commands need the full path or the venv's python).
 - Data root (`ROOT_PATH`): `C:\Users\User_11\Desktop\HIWIN` — `PDFs/`, `PDF_Config.yaml`,
   `PP-DocLayout-PlusL.onnx`, `checkpoint.json`. `Process_Files/` and `Final_Output/`
   are **archived** as `*.7z` there (not extracted).
@@ -127,6 +129,11 @@ the chat log is the production record.
   enumerations must never time out mid-answer.
 - `COMPLETENESS_CONCURRENCY=4` with `parallel = 1` on `Support_Agent_Aux` just
   queues; it is not a misconfiguration.
+- Right after a pipeline run, `doctor.py` reports the embedding/reranker/aux models
+  as `unloaded`: the pipeline models evicted them (`--models-max 4`). The next `/chat`
+  reloads them; verified 2026-09-16 (peak 48.3 GB on the 49 GB card, no OOM).
+- A rebuild from a fresh clone was exercised end to end on 2026-09-16 (2-page PDF,
+  separate `hiwin_rag_sim` database, then dropped): about 4 min including model loads.
 - `inspect_metadata.py`/`doctor.py` report `data_product_cad_urls` and
   `data_product_information_urls` as "plain tables": correct, they are flat URL
   lists read by `db_search_product_urls`, not vector tables.

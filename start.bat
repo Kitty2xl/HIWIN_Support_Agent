@@ -18,11 +18,14 @@ if "%LLAMA_SERVER%"=="" set "LLAMA_SERVER=C:\Users\User_11\Desktop\llama\llama-s
 if "%PRESET%"=="" set "PRESET=%~dp0config.ini"
 if "%ROUTER_HOST%"=="" set "ROUTER_HOST=127.0.0.1"
 if "%ROUTER_PORT%"=="" set "ROUTER_PORT=11400"
-REM How many models may be resident at once. 4 = the serving set; use 6 to keep the
-REM two pipeline models loaded as well while ingesting (needs the VRAM).
+REM How many models may be resident at once. 4 = the serving set. When the
+REM pipeline runs, its two models evict the least-recently-used serving models
+REM (they reload on the next /chat). Raise to 6 only if the VRAM allows it.
 if "%MODELS_MAX%"=="" set "MODELS_MAX=4"
 REM Which GPU(s) the router may use. On a shared multi-GPU box pin ONE card
-REM (index from nvidia-smi); delete this line to let llama.cpp use every GPU.
+REM (index as shown by nvidia-smi); delete the CUDA_VISIBLE_DEVICES line to let
+REM llama.cpp use every GPU. PCI_BUS_ID makes CUDA index N == nvidia-smi index N.
+set "CUDA_DEVICE_ORDER=PCI_BUS_ID"
 if "%CUDA_VISIBLE_DEVICES%"=="" set "CUDA_VISIBLE_DEVICES=0"
 REM ----------------------------------------------------------------------
 
@@ -32,9 +35,23 @@ if not exist "%LLAMA_SERVER%" (
     exit /b 1
 )
 
+REM ---- Find Python 3.12 (python on PATH, else the py launcher, else common installs) ----
+set "PYCMD="
+if defined PYTHON set "PYCMD=%PYTHON%"
+if not defined PYCMD (python --version >nul 2>&1 && set "PYCMD=python")
+if not defined PYCMD (py -3.12 --version >nul 2>&1 && set "PYCMD=py -3.12")
+if not defined PYCMD (if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PYCMD=%LOCALAPPDATA%\Programs\Python\Python312\python.exe")
+if not defined PYCMD (if exist "C:\Python312\python.exe" set "PYCMD=C:\Python312\python.exe")
+if not defined PYCMD (if exist "C:\ProgramData\anaconda3\python.exe" set "PYCMD=C:\ProgramData\anaconda3\python.exe")
+if not defined PYCMD (
+    echo ERROR: Python 3.12 was not found. Install it from python.org ^(tick "Add to PATH"^),
+    echo        or set PYTHON=C:\path\to\python.exe before running this script.
+    exit /b 1
+)
+
 if not exist ".venv\" (
-    echo Creating virtual environment...
-    python -m venv .venv || (echo ERROR: Python 3.12 not on PATH & exit /b 1)
+    echo Creating virtual environment with %PYCMD% ...
+    %PYCMD% -m venv .venv || (echo ERROR: could not create .venv & exit /b 1)
 )
 call .venv\Scripts\activate.bat
 pip install -q -r requirements.txt
@@ -55,7 +72,8 @@ if errorlevel 1 (
     timeout /t 2 >nul
     goto waitloop
 )
-echo Router is up (models load in the background via load-on-startup).
+echo Router answers; waiting for the load-on-startup models to finish loading (about a minute)...
+python doctor.py --wait-models
 
 echo.
 echo Running preflight checks (python doctor.py) ...

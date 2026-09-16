@@ -116,7 +116,7 @@ settings.json IMAGE_TARGET_ROOT     ══ .env IMAGE_STATIC_ROOT
 
 | 項目 | 值 |
 |---|---|
-| 專案 | `C:\Users\User_11\Desktop\HIWIN\HIWIN_Dem\HIWIN_Support_Agent`（venv `.venv`，Python 3.12.7） |
+| 專案 | `C:\Users\User_11\Desktop\HIWIN\HIWIN_Dem\HIWIN_Support_Agent`（venv `.venv`）。Python 3.12.7 是 Anaconda 的 `C:\ProgramData\anaconda3\python.exe`，**不在 PATH 上**——啟動腳本會自行找到；手動下指令請用完整路徑。 |
 | 後端 | `http://localhost:8079`（uvicorn） |
 | 推論 | llama.cpp 路由 `http://localhost:11400`；執行檔 `C:\Users\User_11\Desktop\llama\llama-server.exe`；GGUF 位於 `C:\Users\User_11\Desktop\HIWIN\Models` |
 | PostgreSQL | **18.1，埠 5432**——資料庫 `hiwin_rag_db`、schema `hiwin_rag`（28 張 `data_*` 資料表、約 29.7k 個向量化頁面、1.4 GB）、對話記錄 `hiwin_cs_db.chat_logs`。pgvector 0.8.1。**另一個叢集（PostgreSQL 17）在埠 5433，屬於其他使用者**——不是我們的。 |
@@ -179,6 +179,11 @@ pip install -r requirements.txt          # 後端＋管線同一份
 
 `requirements.lock.txt` 是本專案最後驗證通過的精確版本。啟動腳本（`start.*`、`run.*`）
 第一次執行時會自動建立 venv 並安裝，因此上面的手動步驟可省略。
+
+> **`python` 不是可辨識的命令？** Windows 常常裝了 Python 卻沒加進 PATH（本機是
+> `C:\ProgramData\anaconda3\python.exe`）。`-m venv` 那一步請用完整路徑，或有 py 啟動器時用
+> `py -3.12`。啟動腳本會自行嘗試 `python`、`py -3.12` 與常見安裝位置；
+> `set PYTHON=C:\path\to\python.exe`（Linux：`export PYTHON=...`）可覆蓋。
 
 Linux 注意：OpenCV 使用 *headless* 版本（不需 `libGL`）。管線 GUI 需要 `python3-tk`；
 TUI 與後端不需顯示器。
@@ -524,6 +529,15 @@ python -m ingestion.Ingest --force        # 已標記完成的文件也重新匯
 （`INGEST_BY_PAGE = true`，正式模式）從 `Process_Files/…/Pass_3b` 讀逐頁 Markdown，因此
 重新匯入需要該資料夾，不只 `Final_Output`。
 
+**管線模型與服務模型。** 管線使用與後端相同的路由。它的兩個模型不是 `load-on-startup`；
+送出第一頁時路由才載入它們，而在預設 `--models-max 4` 下會擠掉最久未用的服務模型
+（測試時先是向量化、再是 reranker；48 GB 卡峰值 48.3 GB，可以運作）。之後服務模型組不完整，
+直到下一個 `/chat` 請求把需要的模型重新載回（第一題多花約 30 秒），因此請在離峰時段匯入，
+或只有在 GPU 真的放得下六個模型時才在啟動腳本設 `MODELS_MAX=6`。
+
+2026-09-16 已從全新 clone 端到端測試：一份 2 頁 PDF 含模型載入約 4 分鐘（Pass 1 3 秒、
+Pass 2–4 在路由上、然後匯入）；列出現在 `data_controller_drive`，後端能據此回答。
+
 ### 模型檔
 
 `pipeline/models.json` 列出 GGUF 檔名與 `model_dir`。GUI（**Download models…**）／TUI（`m`）
@@ -568,6 +582,9 @@ python -m ingestion.Ingest --force        # 已標記完成的文件也重新匯
 | 獨立前端看不到圖片 | 非同源：兩者放在同一反向代理後，或改用絕對圖片 URL。 |
 | 管線：`Final document not found`／明明存在卻說找不到（Windows） | 路徑超過 260 字元；程式使用 `\\?\` 長路徑——請確認執行的是本專案現行的管線，而非舊複本。 |
 | 管線 GUI：`No module named tkinter` | `sudo apt install python3-tk`，或改用 `tui.py`。 |
+| 管線在 `Successfully ingested` 之後以 `UnicodeEncodeError: 'cp950' codec can't encode…` 結束 | 舊版管線在傳統 Windows 主控台印 emoji；資料*已經*匯入。現行程式強制 UTF-8 輸出——請更新你執行的那份。 |
+| `doctor.py`：剛跑完管線就出現 `EMBEDDING_MODEL … is unloaded` | 被管線模型擠掉了。下一個 `/chat` 會自動重新載入；或重啟路由。 |
+| `doctor.py --wait-models` 說某模型 `stayed unloaded` | 同樣是被擠掉，或該區段缺 `load-on-startup = true`。無害：第一次使用時會載入。 |
 
 ## 15. 已知問題
 

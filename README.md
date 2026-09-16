@@ -128,7 +128,7 @@ at each one.
 
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\User_11\Desktop\HIWIN\HIWIN_Dem\HIWIN_Support_Agent` (venv `.venv`, Python 3.12.7) |
+| Repo | `C:\Users\User_11\Desktop\HIWIN\HIWIN_Dem\HIWIN_Support_Agent` (venv `.venv`). Python 3.12.7 is the Anaconda install `C:\ProgramData\anaconda3\python.exe` and is **not on PATH** — the launchers find it; for manual commands use the full path. |
 | Backend | `http://localhost:8079` (uvicorn) |
 | Inference | llama.cpp router at `http://localhost:11400`, binary `C:\Users\User_11\Desktop\llama\llama-server.exe`, GGUFs in `C:\Users\User_11\Desktop\HIWIN\Models` |
 | PostgreSQL | **18.1 on port 5432** — database `hiwin_rag_db`, schema `hiwin_rag` (28 `data_*` tables, ~29.7k vectorised pages, 1.4 GB), chat log `hiwin_cs_db.chat_logs`. pgvector 0.8.1. A **second cluster (PostgreSQL 17) on port 5433 belongs to another user** — not ours. |
@@ -197,6 +197,12 @@ pip install -r requirements.txt          # backend + pipeline in one file
 `requirements.lock.txt` holds the exact versions this project was last verified
 with. The launchers (`start.*`, `run.*`) create the venv and install for you on
 first run, so the manual steps above are optional.
+
+> **`python` is not recognised?** Windows often has Python installed but not on
+> PATH (on this server it is `C:\ProgramData\anaconda3\python.exe`). Use the full
+> path for the `-m venv` step, or `py -3.12` if the launcher is installed. The
+> launchers try `python`, `py -3.12` and the usual install folders themselves;
+> `set PYTHON=C:\path\to\python.exe` (Linux: `export PYTHON=...`) overrides.
 
 Linux notes: OpenCV is the *headless* build (no `libGL` needed). The pipeline
 GUI needs `python3-tk`; the TUI and the backend need no display.
@@ -577,6 +583,20 @@ ingestion (`INGEST_BY_PAGE = true`, the production mode) reads the per-page
 markdown from `Process_Files/…/Pass_3b`, so re-ingesting needs that folder, not
 just `Final_Output`.
 
+**Pipeline models vs. serving models.** The pipeline talks to the same router the
+backend uses. Its two models are not `load-on-startup`; when the first page is
+sent, the router loads them and — with the default `--models-max 4` — evicts the
+least-recently-used serving models (the embedding and reranker went first in
+testing; peak use was 48.3 GB of the 49 GB card, and it worked). Afterwards the
+serving set is incomplete until the next `/chat` request reloads what it needs
+(about 30 s extra on that first answer), so ingest during quiet hours, or set
+`MODELS_MAX=6` in the launcher only if the GPU really has room for all six.
+
+Tested end to end on 2026-09-16 from a fresh clone: one 2-page PDF took about
+4 minutes including model loads (Pass 1 in 3 s, Passes 2–4 on the router, then
+ingest); the rows appeared in `data_controller_drive` and the backend answered
+from them.
+
 ### Model files
 
 `pipeline/models.json` lists the GGUF filenames and `model_dir`. The GUI
@@ -626,6 +646,9 @@ Run `python doctor.py --all` first; then:
 | Images don't show in a separate frontend | Not same-origin: reverse-proxy both, or make image URLs absolute. |
 | Pipeline: `Final document not found` / files "missing" that exist (Windows) | Paths over 260 chars; the code uses `\\?\` long paths — make sure you run the repo's current pipeline, not an old copy. |
 | Pipeline GUI: `No module named tkinter` | `sudo apt install python3-tk`, or use `tui.py`. |
+| Pipeline ends with `UnicodeEncodeError: 'cp950' codec can't encode…` after `Successfully ingested` | An old copy of the pipeline printing an emoji to a legacy Windows console; the data *was* ingested. Current code forces UTF-8 output — update the copy you run. |
+| `doctor.py`: `EMBEDDING_MODEL … is unloaded` right after running the pipeline | The pipeline models evicted it. The next `/chat` reloads it automatically; or restart the router. |
+| `doctor.py --wait-models` says a model `stayed unloaded` | Same eviction, or the section lacks `load-on-startup = true`. Harmless: it loads on first use. |
 
 ## 15. Known issues
 

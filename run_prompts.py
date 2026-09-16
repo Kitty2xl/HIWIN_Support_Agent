@@ -36,6 +36,14 @@ import time
 
 import requests
 
+# Console-safe output on every OS (a Windows console/redirect with a legacy code page
+# such as cp950 would otherwise raise UnicodeEncodeError on non-ASCII text).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # ---- SETTINGS (edit these to run straight from your IDE) --------------------
 CHAT_URL   = os.environ.get("CHAT_URL", "http://localhost:8079/chat")
 TIMEOUT    = int(os.environ.get("CHAT_TIMEOUT", "300"))  # cold model loads can be slow

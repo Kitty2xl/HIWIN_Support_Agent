@@ -236,3 +236,4 @@ Kept here because the comments in `config.ini` / `.env` only tell part of it.
 | 2026-08-28 | `parallel = 1` on embedding / reranker / aux | identical requests returned different vectors across slots; rankings wobbled |
 | 2026-09-11/13 | `bak_data_*` snapshots of every table | before further batch repairs |
 | 2026-09-16 | Handoff audit: `doctor.py`, `setup_db.py`, in-place `env_from_settings.py`, `--assets-only`, `EMBED_MODEL` setting, `.gitattributes`, headless OpenCV, docs rewrite | make the project rebuildable by someone new on Windows or Linux |
+| 2026-09-16 | Newcomer rebuild simulation from a fresh clone (2-page PDF → `hiwin_rag_sim`): launchers now find Python when it is not on PATH, set `CUDA_DEVICE_ORDER=PCI_BUS_ID`, wait for models to finish loading; UTF-8 console output in the pipeline (the final emoji print crashed on cp950); `import pymupdf`; doctor warns on evicted/loading models | every step of Path C was exercised and each stumble fixed |

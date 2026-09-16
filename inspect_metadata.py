@@ -14,6 +14,16 @@ import json
 import config
 import db
 
+import sys
+
+# Console-safe output on every OS (a Windows console/redirect with a legacy code page
+# such as cp950 would otherwise raise UnicodeEncodeError on non-ASCII text).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])

@@ -1,7 +1,10 @@
 import cv2
 import numpy as np
 import os
-import fitz
+try:
+    import pymupdf as fitz          # PyMuPDF >= 1.24 (the `fitz` name is deprecated)
+except ImportError:                 # older PyMuPDF
+    import fitz
 import onnxruntime as ort
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed

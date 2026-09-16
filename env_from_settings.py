@@ -28,6 +28,16 @@ import os
 import re
 import shutil
 
+import sys
+
+# Console-safe output on every OS (a Windows console/redirect with a legacy code page
+# such as cp950 would otherwise raise UnicodeEncodeError on non-ASCII text).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 BASE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS = os.path.join(BASE, "pipeline", "settings.json")
 ENV = os.path.join(BASE, ".env")

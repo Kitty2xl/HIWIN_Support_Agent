@@ -10,6 +10,14 @@ import sys
 _PIPELINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PIPELINE_DIR not in sys.path:
     sys.path.insert(0, _PIPELINE_DIR)
+# Console-safe output on every OS: a Windows console/redirect with a legacy code
+# page (e.g. cp950) cannot print the arrows/emoji in progress messages and would
+# crash the run with UnicodeEncodeError at the very last print.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 import psycopg2
 from psycopg2 import pool as pg_pool
@@ -470,7 +478,7 @@ def run_ingestion_stage(checkpoint_manager=None, doc_checkpoint_map=None,
                 print(f"  [Checkpoint] Not marking '{file_name}' as ingested "
                       f"(some files failed to parse) — it will retry next run.")
 
-    print("\n✅ All product types fully processed and stored in their respective tables!")
+    print("\nDone: all product types processed and stored in their respective tables.")
 
 
 # --- Standalone entry point ---

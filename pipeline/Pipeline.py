@@ -12,6 +12,14 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
+# Console-safe output on every OS: a Windows console/redirect with a legacy code
+# page (e.g. cp950) cannot print the arrows/emoji in progress messages and would
+# crash the run with UnicodeEncodeError at the very last print.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
