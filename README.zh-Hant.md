@@ -2,6 +2,8 @@
 
 [English](README.md) · **繁體中文**
 
+**作者：** ACPIE_Lab
+
 一套自架的 HIWIN 工業產品**支援代理**：用戶端把問題與語言代碼送到 `POST /chat`；
 服務會對本地的 **PostgreSQL + pgvector** 知識庫與本地的 **llama.cpp** 推論伺服器執行
 代理式（agentic）檢索流程，回傳含結構化引用與內嵌技術圖示的 Markdown 答覆。本專案
@@ -35,7 +37,7 @@
 14. [疑難排解](#14-疑難排解)
 15. [已知問題](#15-已知問題)
 16. [專案結構](#16-專案結構)
-17. [授權](#17-授權)
+17. [作者與第三方聲明](#17-作者與第三方聲明)
 
 ---
 
@@ -642,8 +644,8 @@ HIWIN_Support_Agent/
     └── PDF_Config.example.yaml
 ```
 
-## 17. 授權
+## 17. 作者與第三方聲明
 
-專有／僅供內部使用——見 [LICENSE](LICENSE)。第三方元件與模型列於
+由 **ACPIE_Lab** 開發與維護，供 HIWIN 內部使用。第三方元件與模型列於
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)；對外散布前請注意 **PyMuPDF**
 （AGPL-3.0，僅管線使用）與 **Gemma** 模型條款。

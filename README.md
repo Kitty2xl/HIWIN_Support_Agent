@@ -2,6 +2,8 @@
 
 **English** · [繁體中文](README.zh-Hant.md)
 
+**Author:** ACPIE_Lab
+
 A self-hosted **support agent** for HIWIN industrial products: a client sends a
 question and a language code to `POST /chat`; the service runs an agentic
 retrieval flow against a local **PostgreSQL + pgvector** knowledge base and a
@@ -37,7 +39,7 @@ catalogues, so one repo covers both *building* and *serving*.
 14. [Troubleshooting](#14-troubleshooting)
 15. [Known issues](#15-known-issues)
 16. [Project structure](#16-project-structure)
-17. [License](#17-license)
+17. [Author and third-party notices](#17-author-and-third-party-notices)
 
 ---
 
@@ -709,9 +711,9 @@ HIWIN_Support_Agent/
     └── PDF_Config.example.yaml
 ```
 
-## 17. License
+## 17. Author and third-party notices
 
-Proprietary / internal use only — see [LICENSE](LICENSE). Third-party
+Developed and maintained by **ACPIE_Lab** for HIWIN's internal use. Third-party
 components and models are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md);
 note **PyMuPDF** (AGPL-3.0, pipeline only) and the **Gemma** model terms before
 any external distribution.

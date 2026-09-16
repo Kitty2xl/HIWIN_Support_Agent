@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-HIWIN_Support_Agent itself is proprietary / internal-use-only (see [LICENSE](LICENSE)).
+HIWIN_Support_Agent itself is developed by ACPIE_Lab for HIWIN's internal use.
 It **depends on** the third-party components below but does **not redistribute**
 them: the Python packages are installed from PyPI via `pip`, and the inference
 server, database, and model weights are installed/run separately. This file is for

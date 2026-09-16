@@ -56,7 +56,7 @@ guessing before running it.
    incidents** (reasoning-budget cap, `parallel = 1` for deterministic embeddings,
    single-GPU pinning). Keep the comments when you edit `config.ini`.
 7. **Secrets are committed on purpose** (`.env`, `pipeline/settings.json`,
-   `pipeline/models.json`). This is an internal, proprietary repo; the
+   `pipeline/models.json`). This is an internal ACPIE_Lab repo; the
    `.gitignore` explains it. Do not scrub them in a "cleanup" — but if the repo
    ever goes public, rotate the DB password first.
 8. **Line endings:** `.gitattributes` pins `*.sh` to LF and `*.bat` to CRLF. Do not

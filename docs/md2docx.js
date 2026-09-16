@@ -160,7 +160,8 @@ const doc = new Document({
     children: [
       new Paragraph({ children: [new TextRun({ text: "HIWIN Support Agent", font: FONT, size: 52, bold: true, color: "1F3864" })], spacing: { before: 2000, after: 120 }, alignment: AlignmentType.CENTER }),
       new Paragraph({ children: [new TextRun({ text: "操作手冊", font: FONT, size: 44, bold: true, color: "1F3864" })], spacing: { after: 500 }, alignment: AlignmentType.CENTER }),
-      new Paragraph({ children: [new TextRun({ text: "安裝、啟動、使用、資料更新、備份與故障排除", font: FONT, size: 24, color: "404040" })], alignment: AlignmentType.CENTER, spacing: { after: 900 } }),
+      new Paragraph({ children: [new TextRun({ text: "安裝、啟動、使用、資料更新、備份與故障排除", font: FONT, size: 24, color: "404040" })], alignment: AlignmentType.CENTER, spacing: { after: 200 } }),
+      new Paragraph({ children: [new TextRun({ text: "ACPIE_Lab", font: FONT, size: 26, bold: true, color: "2F5496" })], alignment: AlignmentType.CENTER, spacing: { after: 700 } }),
       ...intro,
       new Paragraph({ text: "目錄", heading: HeadingLevel.HEADING_1, pageBreakBefore: true }),
       ...toc.map(t => new Paragraph({ children: [new TextRun({ text: t, font: FONT, size: 22 })], spacing: { after: 80 }, indent: { left: 400 } })),
