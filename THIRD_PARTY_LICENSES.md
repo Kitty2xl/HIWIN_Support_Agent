@@ -25,7 +25,7 @@ attribution and compliance.
 | Package | License |
 |---|---|
 | numpy | BSD-3-Clause (bundles 0BSD / MIT / Zlib / CC0-1.0) |
-| opencv-python | Apache-2.0 (OpenCV 4.x); MIT (packaging) |
+| opencv-python-headless | Apache-2.0 (OpenCV); MIT (packaging) |
 | PyMuPDF | **AGPL-3.0-or-later** OR Artifex commercial license — **strong copyleft** |
 | onnxruntime | MIT |
 | openai | Apache-2.0 |

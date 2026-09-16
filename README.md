@@ -1,810 +1,687 @@
-# HIWIN Support Agent Backend
+# HIWIN Support Agent
 
 **English** · [繁體中文](README.zh-Hant.md)
 
-A minimal, standalone Python/FastAPI backend for the HIWIN industrial-products
-**support agent** (a Knowledge Retrieval Assistant). A client sends a prompt and
-a language code over HTTP; the service runs an agentic retrieval flow against a
-local Postgres + pgvector store and a local llama.cpp inference server, then
-returns a markdown answer with structured citations and inline technical figures.
+A self-hosted **support agent** for HIWIN industrial products: a client sends a
+question and a language code to `POST /chat`; the service runs an agentic
+retrieval flow against a local **PostgreSQL + pgvector** knowledge base and a
+local **llama.cpp** inference server, and returns a markdown answer with
+structured citations and inline technical figures. The repository also contains
+the **ingestion pipeline** that builds that knowledge base from HIWIN's PDF
+catalogues, so one repo covers both *building* and *serving*.
 
-It is **API-first** — any client (a web app, another service, `curl`) can call
-it. A small HTML page is bundled purely as an **example/demo** frontend. It
-replaces an earlier [open-WebUI](https://github.com/open-webui/open-webui)
-deployment with a small, transparent service.
-
-The repo also bundles the **ingestion pipeline** (`pipeline/`) that turns source
-PDFs into the Postgres + pgvector database the backend reads — so this one repo
-covers both **building** and **serving** the knowledge base. If you are starting
-from an empty database of your own, follow the [Quick start](#quick-start-from-scratch).
+> **Inherited this project? Start here.**
+> 1. Read [§2 How the pieces fit](#2-how-the-pieces-fit) — three config files must agree, and most problems are one of them being wrong.
+> 2. Run `python doctor.py --all` — it checks the whole stack and tells you exactly what to fix.
+> 3. For everyday work (tuning answers, adding PDFs, backups) read [docs/MAINTENANCE.md](docs/MAINTENANCE.md).
+> 4. [AGENTS.md](AGENTS.md) is a condensed brief for AI coding agents and new developers; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the design.
 
 ---
 
 ## Table of contents
 
-- [Features](#features)
-- [How it works](#how-it-works)
-- [Fastest start (serve an existing database)](#fastest-start-serve-an-existing-database)
-- [Quick start (from scratch)](#quick-start-from-scratch)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Model parameters](#model-parameters)
-- [Running](#running)
-- [Usage](#usage)
-- [Chat logging](#chat-logging)
-- [Example demo frontend](#example-demo-frontend)
-- [Data ingestion pipeline](#data-ingestion-pipeline)
-- [Project structure](#project-structure)
-- [Troubleshooting](#troubleshooting)
-- [Known issues](#known-issues)
-- [License](#license)
+1. [What it does](#1-what-it-does)
+2. [How the pieces fit](#2-how-the-pieces-fit)
+3. [Current deployment snapshot](#3-current-deployment-snapshot)
+4. [Prerequisites](#4-prerequisites)
+5. [Install](#5-install)
+6. [Path A — serve the existing database](#6-path-a--serve-the-existing-database)
+7. [Path B — move to another machine](#7-path-b--move-to-another-machine)
+8. [Path C — rebuild the database from PDFs](#8-path-c--rebuild-the-database-from-pdfs)
+9. [PostgreSQL and pgvector](#9-postgresql-and-pgvector)
+10. [Configuration reference](#10-configuration-reference)
+11. [Using the API](#11-using-the-api)
+12. [Data ingestion pipeline](#12-data-ingestion-pipeline)
+13. [Maintenance](#13-maintenance)
+14. [Troubleshooting](#14-troubleshooting)
+15. [Known issues](#15-known-issues)
+16. [Project structure](#16-project-structure)
+17. [License](#17-license)
 
 ---
 
-## Features
+## 1. What it does
 
-- **Single `POST /chat` API** — `{prompt, language}` in, JSON out (markdown
-  `response`, structured `sources`, and a tool `trace`).
-- **Agentic state machine** — an LLM tool-calling loop drives a routing →
-  retrieval → formatting → fallback flow defined in `prompts/System_prompt.md`.
+- **Single `POST /chat` API** — `{prompt, language}` in; JSON out with a markdown
+  `response`, structured `sources`, a tool-call `trace` and timing `metrics`.
+- **Agentic state machine** — an LLM tool-calling loop drives *routing →
+  retrieval → formatting → fallback*, defined in natural language in
+  `prompts/System_prompt.md` plus one skill file per language.
 - **Multilingual** — English (`en`), Japanese (`jp`), Traditional Chinese (`tc`),
-  Simplified Chinese (`sc`), with character-set mirroring in the answer.
-- **Full retrieval pipeline** — embedding → pgvector similarity search →
-  reranking → vision analysis of retrieved diagrams.
-- **Structured citations** — a deduplicated `sources` array built from each
-  retrieved chunk's `metadata_` (page / file / `web_path`).
-- **Image serving** — the backend serves the HIWIN figures at `/static/HIWIN`,
-  so the markdown image links resolve same-origin.
-- **Example demo frontend** — an optional single-page HTML demo at `/`
-  (`frontend/index.html`) for trying prompts and previewing rendered answers.
-  It is illustrative only; the service is API-first and you can replace it with
-  your own frontend.
-
-## How it works
+  Simplified Chinese (`sc`); the answer mirrors the user's character set.
+- **Full retrieval pipeline** — embed → pgvector similarity search (per product
+  table, in parallel) → rerank → optional vision analysis of retrieved figures →
+  a **completeness pass** that re-reads each passage so long spec tables are
+  reproduced in full instead of summarised.
+- **Structured citations** — built from each chunk's `metadata_`, pruned to the
+  pages the answer actually cites.
+- **Image serving** — figures are served at `/static/HIWIN` so the markdown
+  image links resolve same-origin.
+- **Chat logging** — every exchange (prompt, answer, sources, trace, timings,
+  tokens) is stored in `hiwin_cs_db.chat_logs` for analytics and debugging.
+- **Demo frontend with a debug panel** at `/` — illustrative only; the product
+  is the API.
 
 ```
 POST /chat {prompt, language}
   └─ inject "[Language Code: xx]" into the prompt
-  └─ build system prompt = System_prompt.md + the per-language skill
-  └─ agent loop (LLM with tool schemas):
-        ├─ db_get_available_product_tables   (discover tables)
-        ├─ db_search_technical_manuals       (embed → pgvector → rerank → vision)
+  └─ system prompt = System_prompt.md + prompts/skills/<language>.md
+  └─ agent loop (LLM + tool schemas):
+        ├─ db_get_available_product_tables   (discover data_* tables)
+        ├─ db_search_technical_manuals       (embed → pgvector → rerank → vision → completeness)
         ├─ db_search_certifications          (certificates + web_path)
         └─ db_search_product_urls            (download / CAD links)
-  └─ return { response (markdown), sources, trace }
+  └─ return { response (markdown), sources, trace, metrics }
 ```
 
-The LLM, following the system prompt, chooses which tools to call and when —
-exactly as open-WebUI's native function calling did. See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
+## 2. How the pieces fit
 
-When a request enumerates a spec table ("list all…"), a **completeness pass** runs
-after the draft: each retrieved passage is re-read on its own to extract every
-matching row, then the answer is rebuilt to include them all. It's accurate but
-costs extra model calls (see [Configuration](#configuration) — `COMPLETENESS_*` —
-to tune or turn it off).
+Two applications share one database and one inference server:
 
-## Fastest start (serve an existing database)
+```
+            PDFs ─▶ pipeline/ (layout → VLM transcribe → validate → embed) ─▶ PostgreSQL + pgvector
+                                                                                   │  hiwin_rag.data_* tables
+                                                                                   ▼
+client ─▶ POST /chat ─▶ backend (agent loop + 4 retrieval tools) ◀─────────── embedding / rerank / chat
+                                                                       llama.cpp router (config.ini)
+```
 
-Already have a populated `hiwin_rag` database and the GGUF models on disk? This is
-the shortest path to a live `/chat` API — no pipeline, no rebuild:
+**Three files configure the whole system, and they must agree.** This is the
+single most common source of "it doesn't work":
 
-1. **Clone + enter the repo:**
+| File | Configures | Key contents |
+|---|---|---|
+| [`config.ini`](config.ini) | the **llama.cpp router** (which GGUF files, context size, sampling, GPU layers) | one `[section]` per model **name**; absolute paths to the GGUF files |
+| [`.env`](.env) | the **backend** | `INFERENCE_HOST`, the model **names** it asks for, `DB_*`, `IMAGE_STATIC_ROOT`, answer-quality tuning |
+| [`pipeline/settings.json`](pipeline/settings.json) | the **pipeline** | `ROOT_PATH`, `IMAGE_TARGET_ROOT`, `DB_*`, the model **names** per pass, `EMBED_MODEL` |
+
+The links that must hold:
+
+```
+config.ini [Support_Agent_Qwen3.6]  ══ .env LANGUAGE_MODEL
+config.ini [Embedding_Qwen3.6]      ══ .env EMBEDDING_MODEL      ══ settings.json EMBED_MODEL   (same model that built the DB!)
+config.ini [Reranker_Qwen3.6]       ══ .env RERANKER_MODEL
+config.ini [Support_Agent_Aux]      ══ .env COMPLETENESS_MODEL
+config.ini [RAG_Pipeline_Pass34]    ══ settings.json MODEL_PASS_2 / 2B / 3
+config.ini [RAG_Pipeline_Pass5Ingest] ══ settings.json MODEL_PASS_3B / 4
+settings.json DB_HOST/PORT/NAME/USER/PASS/SCHEMA ══ .env DB_HOST/PORT/NAME/USER/PASSWORD/SCHEMA
+settings.json IMAGE_TARGET_ROOT     ══ .env IMAGE_STATIC_ROOT
+```
+
+Two helpers keep this honest:
+
+- `python env_from_settings.py` — copies the shared DB / image / host / embedding
+  values from `settings.json` into `.env` **in place** (your tuning keys and
+  comments in `.env` are left alone). Edit shared values in `settings.json`, run
+  this, done.
+- `python doctor.py --all` — verifies every link above, every file path in
+  `config.ini`, the database (version, pgvector, tables, language codes, vector
+  width), the router's model list, and more. **Run it first, always.**
+
+Everything else — prompts, retrieval caps, ports — has sane committed defaults.
+
+## 3. Current deployment snapshot
+
+Facts about the machine this repo was audited on (2026-09-16, Windows Server
+2022). On a new machine these are the paths you change; `doctor.py` will point
+at each one.
+
+| Item | Value |
+|---|---|
+| Repo | `C:\Users\User_11\Desktop\HIWIN\HIWIN_Dem\HIWIN_Support_Agent` (venv `.venv`, Python 3.12.7) |
+| Backend | `http://localhost:8079` (uvicorn) |
+| Inference | llama.cpp router at `http://localhost:11400`, binary `C:\Users\User_11\Desktop\llama\llama-server.exe`, GGUFs in `C:\Users\User_11\Desktop\HIWIN\Models` |
+| PostgreSQL | **18.1 on port 5432** — database `hiwin_rag_db`, schema `hiwin_rag` (28 `data_*` tables, ~29.7k vectorised pages, 1.4 GB), chat log `hiwin_cs_db.chat_logs`. pgvector 0.8.1. A **second cluster (PostgreSQL 17) on port 5433 belongs to another user** — not ours. |
+| DB password | in `.env` (`DB_PASSWORD`) and `pipeline/settings.json` (`DB_PASS`), committed on purpose (internal repo) |
+| Data root (`ROOT_PATH`) | `C:\Users\User_11\Desktop\HIWIN` — `PDFs/`, `PDF_Config.yaml`, `PP-DocLayout-PlusL.onnx`, `checkpoint.json`. The pipeline's `Process_Files/` and `Final_Output/` are **archived** there as `.7z` files, not extracted. |
+| Images | **not present** — `IMAGE_STATIC_ROOT` (`…\HIWIN\web_static\HIWIN`) does not exist yet, so answers have no figures and the vision step is skipped. To restore: [MAINTENANCE.md → Restoring the figures](docs/MAINTENANCE.md#restoring-the-figures). |
+| GPUs | 2× NVIDIA RTX A6000 48 GB, **shared with other users**; the router is pinned to GPU 0 by the launchers (`CUDA_VISIBLE_DEVICES=0`). The serving set needs ~47 GB. |
+| Languages in DB | `en`, `jp`, `tc`, `sc` (served) plus a few `kr` rows and NULL rows the agent never reaches — harmless. |
+
+## 4. Prerequisites
+
+> **Can my machine run this?** The serving set is four GGUF models kept resident
+> together: a 35B-A3B chat/vision model (150k context), a 4B embedding model, a
+> 4B reranker and a 4B "aux" model — about **47 GB of VRAM** as configured. It
+> *can* run on CPU or with fewer GPU layers, but expect minutes per answer. Tens
+> of GB of disk for the GGUFs, plus ~5 GB for the database and figures.
+
+**Operating system.** Windows 10/11/Server or Linux (Ubuntu/Debian/RHEL family);
+macOS works for the backend. Both launchers exist (`start.bat` / `start.sh`).
+Line endings are pinned by `.gitattributes`, so a copy made on Windows still
+runs on Linux.
+
+**Python 3.12.x** (tested 3.12.7, pinned in `.python-version`).
+- Windows: python.org installer (tick "Add to PATH"), or `py -3.12`.
+- Ubuntu/Debian: `sudo apt install python3.12 python3.12-venv` (+ `python3-tk`
+  only if you want the pipeline GUI). RHEL: `dnf install python3.12`.
+
+**PostgreSQL 13 – 18 with the pgvector extension.** Any of these versions works;
+see [§9](#9-postgresql-and-pgvector) for pre-installed / older / multiple
+installations and how to get pgvector onto them.
+
+**llama.cpp `llama-server`**, a build recent enough for **router mode**
+(`--models-preset`). Download a release for your OS/GPU (CUDA build for NVIDIA)
+from https://github.com/ggml-org/llama.cpp/releases or build from source. One
+process serves every model.
+
+**Model files (GGUF)** — the names in `config.ini` / `pipeline/models.json`:
+
+| Role | File (as deployed) |
+|---|---|
+| Chat + vision (backend `Support_Agent_Qwen3.6`, pipeline `RAG_Pipeline_Pass34`) | `Qwen3.6-35B-A3B-UD-Q4_K_XL_MTP.gguf` + `mmproj-35BA3B.gguf` |
+| Embedding (`Embedding_Qwen3.6`, **must be the model that built the DB**) | `Qwen3-Embedding-4B.i1-Q4_K_S.gguf` (2560-dim) |
+| Reranker (`Reranker_Qwen3.6`) | `Qwen3-Reranker-4B.i1-Q4_K_S.gguf` |
+| Small text model (backend `Support_Agent_Aux`, pipeline `RAG_Pipeline_Pass5Ingest`) | `gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf` (+ optional draft `mtp-gemma-4-E4B-it.gguf`) |
+| Chat template for the Qwen model | `templates/qwen.jinja` (in this repo) |
+
+**Pipeline only:** the layout-detection ONNX model `PP-DocLayout-PlusL.onnx`
+(PaddleOCR PP-DocLayout_plus-L, https://huggingface.co/PaddlePaddle/PP-DocLayout_plus-L)
+placed directly in `ROOT_PATH`, and the source PDFs under `ROOT_PATH/PDFs/`.
+
+## 5. Install
+
+```bash
+git clone https://github.com/Kitty2xl/HIWIN_Support_Agent
+cd HIWIN_Support_Agent
+
+# Windows
+python -m venv .venv && .venv\Scripts\activate
+# Linux / macOS
+python3 -m venv .venv && source .venv/bin/activate
+
+pip install -r requirements.txt          # backend + pipeline in one file
+# If a fresh install pulls a broken newer package:  pip install -r requirements.lock.txt
+```
+
+`requirements.lock.txt` holds the exact versions this project was last verified
+with. The launchers (`start.*`, `run.*`) create the venv and install for you on
+first run, so the manual steps above are optional.
+
+Linux notes: OpenCV is the *headless* build (no `libGL` needed). The pipeline
+GUI needs `python3-tk`; the TUI and the backend need no display.
+
+## 6. Path A — serve the existing database
+
+You have the database (this machine, or a restored dump) and the GGUF files.
+
+1. **Point the launcher at llama-server.** Open `start.bat` (Windows) or
+   `start.sh` (Linux) and set `LLAMA_SERVER` at the top (or export it as an
+   environment variable). Optional: `MODELS_MAX`, `CUDA_VISIBLE_DEVICES`.
+2. **Check `config.ini` paths** — every `model =`, `mmproj =`, `model-draft =`,
+   `chat-template-file =` must point at a real file on this machine.
+3. **Check `.env`** — `DB_*` for your Postgres, `IMAGE_STATIC_ROOT` for the figure
+   folder (see §3 if it does not exist yet).
+4. **Preflight:** `python doctor.py` (fix FAIL lines top-down).
+5. **Start everything:**
    ```bash
-   git clone https://github.com/Kitty2xl/HIWIN_Support_Agent
-   cd HIWIN_Support_Agent
+   start.bat        # Windows (double-click works)
+   ./start.sh       # Linux / macOS
    ```
-2. **Point the launcher at your inference server.** Open `start.bat` (Windows) or
-   `start.sh` (Linux/macOS) and set two values at the top: `LLAMA_SERVER` (your
-   `llama-server` binary) and `PRESET` (a router preset — copy
-   [`config.ini`](config.ini) and edit its `model` / `mmproj`
-   paths to your GGUFs).
-3. **Fill in `.env`** — at least `IMAGE_STATIC_ROOT` and `DB_PASSWORD` (see
-   [Configuration](#configuration)).
-4. **Run it** (creates the venv, starts the router with all models resident, waits
-   for it, then starts the backend):
-   ```bash
-   start.bat        # Windows
-   ./start.sh       # Linux/macOS
-   ```
-   You're now serving on `http://localhost:8079`. Smoke-test it:
+   The launcher creates the venv, installs requirements, starts the router with
+   all serving models resident, waits until it answers, runs `doctor.py`, then
+   starts the backend on port 8079. Postgres must already be running.
+6. **Smoke test:**
    ```bash
    curl -X POST http://localhost:8079/chat -H "Content-Type: application/json" \
      -d '{"prompt": "HGW20 load capacity", "language": "en"}'
    ```
+   Or open `http://localhost:8079/` for the demo page with the debug panel.
 
-> Postgres must already be running — the launcher only **warns** if it can't reach
-> it. **Building the database from PDFs instead?** Use
-> [Quick start (from scratch)](#quick-start-from-scratch) below.
-> (`run.bat` / `run.sh` are backend-only launchers, for when the router is already up.)
-
-## Quick start (from scratch)
-
-Starting with an empty database of your own, the end-to-end path is:
-**install → prepare Postgres → start the inference server → build the DB with the
-pipeline → serve with the backend.**
-
-1. **Install** — clone, make a venv, and `pip install -r requirements.txt` (this
-   one file covers both the backend and the pipeline). See [Installation](#installation).
-
-2. **Prepare your Postgres database.** Use any database you like (new or existing);
-   enable pgvector and create the schema in it:
-   ```sql
-   \c YOUR_DATABASE_NAME_HERE
-   CREATE EXTENSION IF NOT EXISTS vector;
-   CREATE SCHEMA IF NOT EXISTS hiwin_rag;
-   ```
-   You choose the name / user / password / schema — the pipeline also creates the
-   schemas (`hiwin_rag` for data, `hiwin_cs_db` for chat logs) and `data_*` tables
-   on first run if they're missing, given a user with `CREATE` privilege. (`\c` is
-   a `psql`-only command; in a GUI client like pgAdmin/DBeaver, just connect to the
-   database and run the other two lines.)
-
-3. **Start your inference server** (llama.cpp `llama-server` in router mode) with the models in
-   [Prerequisites](#prerequisites). The GUI/TUI can fetch the GGUFs for you —
-   see [Downloading model files](#downloading-model-files-optional).
-
-4. **Build the database** — point the pipeline at your PDFs and your DB, then run
-   it. See [Data ingestion pipeline](#data-ingestion-pipeline).
-
-5. **Serve answers** — put the **same** DB credentials in `.env` and start the
-   backend. See [Configuration](#configuration) and [Running](#running).
-
-> ⚠️ Steps 4 and 5 have **separate** config files — `pipeline/settings.json` and
-> `.env`. The **database name, user, password, schema, and embedding model must
-> match** between them, because the pipeline *writes* exactly what the backend
-> *reads*.
-
-## Prerequisites
-
-> **Can my machine run this?** The three inference models (chat+vision, embedding,
-> reranker — plus the pipeline's vision/text passes) are multi-billion-parameter
-> GGUFs, several launched at a large context (`--ctx-size 100000`). Realistically
-> you need a **CUDA or Metal GPU with enough VRAM to hold the models you run at
-> once** (router mode keeps them resident together) and **tens of GB of free disk**
-> for the GGUFs. It *can* run CPU-only, but expect answers in minutes, not seconds
-> — a GPU is strongly recommended for anything past a first smoke test.
-
-- **Python 3.12.x** (the [`.python-version`](.python-version) file pins **3.12.7**
-  for `pyenv` users — `pyenv install 3.12.7` then it's selected automatically;
-  without `pyenv`, any 3.12.x already on your PATH is fine). Runs on
-  **Windows, Linux, and macOS**. The pipeline GUI also needs Tk (bundled with
-  Python on Windows/macOS; on Linux: `sudo apt install python3-tk`). The pipeline
-  TUI and the backend need no display.
-- **PostgreSQL** with the **pgvector** extension. Bring your own database — the
-  pipeline creates the schema (default `hiwin_rag`), `data_*` tables, and the
-  `metadata_` jsonb column inside it. **pgvector must be installed into Postgres
-  first** — it is a server-side extension, not a pip package: install the pgvector
-  OS package (e.g. `postgresql-16-pgvector`), use a pgvector-enabled Docker image
-  (`pgvector/pgvector:pg16`), or build from https://github.com/pgvector/pgvector.
-  Running `CREATE EXTENSION vector` normally needs a **superuser** (or a role
-  granted `CREATE` on the database).
-- A local **OpenAI-compatible inference server** — **llama.cpp `llama-server` in
-  router mode**. Started with `--models-preset` (and **no** `-m`), one
-  `llama-server` process hosts **every** model behind a single endpoint and routes
-  each request by its `model` field. Models marked `load-on-startup = true` stay
-  **resident** together (no swapping between the chat / embedding / reranker /
-  small models). Point the clients at that endpoint: the backend's `INFERENCE_HOST`
-  and the pipeline's `LLM_BASE_URL`.
-
-> **The repo ships a ready-to-edit router preset —
-> [`config.ini`](config.ini).** Each `[section]` is a routable
-> model name (must equal the names in `.env` / `pipeline/settings.json` — see
-> [How the model names link up](#how-the-model-names-link-up)); keys are
-> `llama-server`'s long flags without the leading `--` (`--n-gpu-layers 99` →
-> `n-gpu-layers = 99`). Edit the `model` / `mmproj` paths to your GGUFs, then:
->
-> ```sh
-> llama-server --models-preset config.ini --host 127.0.0.1 --port 11400
-> ```
->
-> The `start.bat` / `start.sh` launchers run exactly this for you. See the
-> llama.cpp server docs (**"Using multiple models"**) for the full preset schema
-> and `--models-max` (how many models stay co-resident, default 4).
-
-  The two halves use the server for different model roles:
-
-**To serve answers (backend)** — needs `/v1/chat/completions`, `/v1/embeddings`,
-and `/v1/rerank`, serving:
-  - a chat/vision model (default `Support_Agent_Qwen3.6`),
-  - an embedding model (default `Embedding_Qwen3.6`),
-  - a reranker model (default `Reranker_Qwen3.6`);
-  plus the HIWIN **static image folder** on disk (served at `/static/HIWIN`).
-
-**To build the database (pipeline)** — additionally needs, under your `ROOT_PATH`:
-  - a **`PDFs/`** folder of source PDFs and a **`PDF_Config.yaml`** describing them,
-  - the layout-detection ONNX model **`PP-DocLayout-PlusL.onnx`** (PaddleOCR
-    PP-DocLayout_plus-L, RT-DETR-L, 800×800, 20 layout classes —
-    https://huggingface.co/PaddlePaddle/PP-DocLayout_plus-L);
-  and on the inference server: vision + text models (defaults `RAG_Pipeline_Pass34`
-  and `RAG_Pipeline_Pass5Ingest`) plus the **same embedding model** as the backend
-  (default `Embedding_Qwen3.6`), so the stored vectors are comparable at query time.
-
-> **Tip:** the simplest deployment runs everything **on one machine** (backend,
-> Postgres, inference server), so all hosts are `localhost`.
-
-## Installation
+`run.bat` / `run.sh` start only the backend (router already running). To run the
+router by hand:
 
 ```bash
-# 1. Clone and enter the repo
-git clone https://github.com/Kitty2xl/HIWIN_Support_Agent
-cd HIWIN_Support_Agent
-
-# 2. Create and activate a virtual environment
-python -m venv .venv     # use python3 on Linux/macOS if `python` isn't found
-# Windows (cmd):       .venv\Scripts\activate.bat
-# Windows (PowerShell): .venv\Scripts\Activate.ps1
-# Windows (Git Bash):   source .venv/Scripts/activate
-# Linux / macOS:       source .venv/bin/activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Edit the committed .env — set IMAGE_STATIC_ROOT (see Configuration).
-#    .env ships pre-filled for the internal deployment; no copy step needed.
+llama-server --models-preset config.ini --host 127.0.0.1 --port 11400 --models-max 4
 ```
 
-Or use the convenience launcher, which does steps 2–3 and starts the server:
-`run.bat` (Windows) / `./run.sh` (Linux/macOS).
+### Verify each layer (bottom-up)
 
-## Configuration
-
-All settings are read from environment variables; the committed `.env` file is
-loaded automatically. It ships pre-filled for the internal deployment — edit
-`IMAGE_STATIC_ROOT` (and anything else your setup differs on).
-
-> **Where is `.env`?** It lives in the **repo root** — the same folder as
-> `main.py`, `config.py`, and `run.bat`. Its name starts with a dot, so it is a
-> **hidden file**: Windows Explorer and some editors/file pickers don't show it by
-> default. Reveal it with `dir /a` (Windows) or `ls -a` (Linux/macOS), or open the
-> folder in an editor like VS Code.
-
-If `.env` is missing (e.g. your clone didn't include it), create a file named
-exactly `.env` in the repo root with at least the keys below. An empty or missing
-`DB_PASSWORD` is what produces `fe_sendauth: no password supplied` at query time —
-set it to the **same** value as `pipeline/settings.json` → `DB_PASS`:
-
-```dotenv
-INFERENCE_HOST=http://localhost:11400
-LANGUAGE_MODEL=Support_Agent_Qwen3.6
-EMBEDDING_MODEL=Embedding_Qwen3.6
-RERANKER_MODEL=Reranker_Qwen3.6
-DB_NAME=hiwin_rag_db
-DB_USER=postgres
-DB_PASSWORD=your_db_password          # REQUIRED; must match pipeline/settings.json DB_PASS
-DB_HOST=localhost
-DB_PORT=5432
-DB_SCHEMA=hiwin_rag
-IMAGE_STATIC_ROOT=/path/to/open_webui/static/HIWIN
-CHAT_LOG_ENABLED=true
+```bash
+curl http://localhost:8079/health                 # 1. backend up -> {"status":"ok"}
+curl http://localhost:11400/v1/models             # 2. router up -> lists the model names
+python inspect_metadata.py                        # 3. DB reachable, tables + language codes
+python doctor.py --live                           # 4. real embed / rerank / chat calls
+curl -X POST http://localhost:8079/chat -H "Content-Type: application/json" \
+  -d '{"prompt": "HGW20 load capacity", "language": "en"}'   # 5. end to end
 ```
 
-**Shortcut — generate `.env` from the pipeline config:** rather than filling the
-DB/server/image values in twice, run `python env_from_settings.py`. It reads
-`pipeline/settings.json` (which you already set up for ingestion) and writes a
-matching `.env`, handling the differing key names (`DB_PASS` → `DB_PASSWORD`,
-`IMAGE_TARGET_ROOT` → `IMAGE_STATIC_ROOT`, base URL minus `/v1`). Re-run it
-whenever those shared values change. (An existing `.env` is backed up to `.env.bak`.)
+The first failing step names the layer to fix; cross-reference [§14](#14-troubleshooting).
 
-Key settings:
+## 7. Path B — move to another machine
+
+Moving the running system (Windows → Linux or the reverse) without re-processing
+the PDFs:
+
+1. **Copy the repo** (clone, or copy the folder). Thanks to `.gitattributes` the
+   shell scripts stay LF; if you copied by hand and Linux complains about
+   `bash\r`, run `sed -i 's/\r$//' start.sh run.sh`.
+2. **Copy the GGUF files** and `templates/qwen.jinja`; install `llama-server`.
+   Edit the paths in `config.ini` (Linux paths are fine: `/srv/models/x.gguf`).
+3. **Install PostgreSQL + pgvector** on the target ([§9](#9-postgresql-and-pgvector)),
+   set `DB_*` in `pipeline/settings.json`, run `python env_from_settings.py`, then
+   `python setup_db.py` (creates the database, the `vector` extension and both
+   schemas; idempotent).
+4. **Dump on the old machine, restore on the new one** — commands in
+   [§9 Backups and moving the database](#backups-and-moving-the-database).
+5. **Restore the figures** (`IMAGE_STATIC_ROOT`): copy the folder from the old
+   machine, or rebuild it from the archived `Final_Output` with
+   `python -m ingestion.Ingest --assets-only`
+   ([MAINTENANCE.md](docs/MAINTENANCE.md#restoring-the-figures)).
+6. `python doctor.py --all`, then Path A.
+
+The ONNX model, PDFs and `PDF_Config.yaml` only need to travel if you intend to
+run the pipeline on the new machine.
+
+## 8. Path C — rebuild the database from PDFs
+
+**install → prepare Postgres → start the router → build the DB with the pipeline → serve.**
+
+1. Install ([§5](#5-install)).
+2. Configure the DB in `pipeline/settings.json`, run `python env_from_settings.py`,
+   then `python setup_db.py`.
+3. Start the router (`start.bat` / `start.sh` starts the backend too, which is
+   fine; or run `llama-server --models-preset config.ini … --models-max 6` so the
+   two pipeline models can stay resident alongside the serving ones).
+4. Put the ONNX model and PDFs in `ROOT_PATH`, then run the pipeline
+   ([§12](#12-data-ingestion-pipeline)). The first run generates
+   `PDF_Config.yaml` and stops for review; the second run processes.
+5. `python doctor.py --all` and serve (Path A).
+
+> ⚠️ Before re-ingesting documents that are **already** in the database, read
+> [docs/INGESTION_DEFECTS.md](docs/INGESTION_DEFECTS.md): several pages were
+> repaired by hand *in the database* and a re-ingest would reintroduce the defects.
+
+## 9. PostgreSQL and pgvector
+
+**What the project needs from Postgres:** the `vector` type and the `<=>`
+cosine operator (pgvector), `json` columns, and a user who can `CREATE SCHEMA`
+/ `CREATE TABLE`. The tables have **no vector index** (plain btree on `id` and
+`ref_doc_id`), so nothing depends on HNSW/IVFFlat features. `CREATE EXTENSION
+vector` needs a superuser (once per database).
+
+**Version compatibility.**
+
+| PostgreSQL | pgvector | Status |
+|---|---|---|
+| 18, 17, 16, 15, 14, 13 | 0.8.x (0.8.1 deployed) | supported; 18.1 is what runs today |
+| 12 | ≤ 0.7.4 | works; pgvector 0.8 dropped PG 12 |
+| ≤ 11 | — | not supported by current pgvector; upgrade Postgres |
+
+`setup_db.py` and `doctor.py` print the server version and refuse anything older
+than 12.
+
+**A PostgreSQL is already installed (possibly older).** That is fine as long as
+it is 13+ (12 with an old pgvector). Steps:
+
+1. Find its port: Windows `services.msc` → the `postgresql-x64-NN` service, and
+   `port = …` in `<data dir>\postgresql.conf`; Linux `pg_lsclusters` (Debian) or
+   `ss -ltnp | grep postgres`. **Several installed versions each listen on their
+   own port** (5432, 5433, …) — this machine has 18 on 5432 and someone else's 17
+   on 5433. Put the right one in `DB_PORT`.
+2. Make sure pgvector is available *for that version* (below).
+3. Set `DB_*` in `pipeline/settings.json` → `python env_from_settings.py` →
+   `python setup_db.py --admin-user postgres --admin-password -`.
+
+**Installing pgvector** (server-side extension; `pip` cannot do it):
+
+- Debian/Ubuntu with the PGDG repo: `sudo apt install postgresql-16-pgvector`
+  (match the major version). RHEL family: `sudo dnf install pgvector_16`.
+- From source (any Linux/macOS): `git clone --branch v0.8.1 https://github.com/pgvector/pgvector && cd pgvector && make && sudo make install`
+  (needs `postgresql-server-dev-NN`).
+- Docker: the image `pgvector/pgvector:pg16` (or `pg17`, `pg18`) has it built in.
+- **Windows:** no official binaries. Build with Visual Studio Build Tools + `nmake`
+  per the pgvector README, or — simplest when another same-major install already
+  has it — copy `lib\vector.dll` and `share\extension\vector.control` +
+  `share\extension\vector--*.sql` from that install into
+  `C:\Program Files\PostgreSQL\NN\`, then restart the service. Both clusters on
+  this machine already have 0.8.1.
+- Then: `python setup_db.py` (runs `CREATE EXTENSION IF NOT EXISTS vector`).
+
+Verify at any time: `python doctor.py` → the PostgreSQL section.
+
+### Backups and moving the database
+
+Use the `pg_dump` / `pg_restore` that ship with your Postgres (Windows:
+`C:\Program Files\PostgreSQL\18\bin\`). Only the two application schemas are
+needed; the `bak_*` / `repair_backup_*` / `link_backup_*` snapshot tables in
+`hiwin_rag` are manual-repair history and can be excluded to keep the dump small.
+
+```bash
+# Dump (source machine). Custom format, both schemas, without the repair snapshots:
+pg_dump -h localhost -p 5432 -U postgres -d hiwin_rag_db -Fc \
+  -n hiwin_rag -n hiwin_cs_db \
+  -T 'hiwin_rag.bak_*' -T 'hiwin_rag.repair_backup_*' -T 'hiwin_rag.link_backup_*' \
+  -f hiwin_rag_db.dump
+
+# Restore (target machine) - after `python setup_db.py` created the DB + extension:
+pg_restore -h localhost -p 5432 -U postgres -d hiwin_rag_db --no-owner --no-privileges hiwin_rag_db.dump
+```
+
+- **Same or newer PostgreSQL on the target:** the commands above are all you need.
+- **Older PostgreSQL on the target** (e.g. 18 → 16): a `pg_restore` older than
+  the `pg_dump` that wrote the archive may refuse it ("unsupported version in
+  file header"). Use a plain-SQL dump instead and load it with `psql`; delete any
+  `SET transaction_timeout = 0;` / `SET …` lines the older server rejects:
+  ```bash
+  pg_dump -h localhost -p 5432 -U postgres -d hiwin_rag_db -Fp -n hiwin_rag -n hiwin_cs_db \
+    -T 'hiwin_rag.bak_*' -T 'hiwin_rag.repair_backup_*' -T 'hiwin_rag.link_backup_*' -f hiwin_rag_db.sql
+  psql -h localhost -p 5432 -U postgres -d hiwin_rag_db -v ON_ERROR_STOP=0 -f hiwin_rag_db.sql
+  ```
+  Always run `pg_dump` from the **newer** version's `bin` folder (a newer
+  `pg_dump` can read an older server; the reverse is refused).
+- After restoring: `python doctor.py` must show the same 28 `data_*` tables and
+  `embedding dimension in DB - 2560`.
+
+A dump is also the right nightly backup. The pipeline can always rebuild the
+database from the PDFs, but that takes many GPU-hours and would undo the manual
+repairs.
+
+## 10. Configuration reference
+
+### `.env` (backend)
+
+Loaded automatically from the repo root (a hidden file — `dir /a` / `ls -a`).
+Shared values come from `settings.json` via `env_from_settings.py`; the rest is
+backend-only tuning. The committed file is the production configuration.
 
 | Variable | Default | Description |
 |---|---|---|
-| `INFERENCE_HOST` | `http://localhost:11400` | Base URL of the inference server. Use the server IP when running remotely. |
-| `LANGUAGE_MODEL` | `Support_Agent_Qwen3.6` | Chat + vision model name. |
-| `EMBEDDING_MODEL` | `Embedding_Qwen3.6` | Embedding model — **must match** the one that populated the DB. |
+| `INFERENCE_HOST` | `http://localhost:11400` | Router base URL. Use the server IP when the backend runs elsewhere. |
+| `LANGUAGE_MODEL` | `Support_Agent_Qwen3.6` | Chat + vision model name (a `config.ini` section). |
+| `EMBEDDING_MODEL` | `Embedding_Qwen3.6` | Embedding model — **must be the model that populated the DB.** |
 | `RERANKER_MODEL` | `Reranker_Qwen3.6` | Reranker model name. |
-| `DB_HOST` / `DB_PORT` | `localhost` / `5432` | Postgres host/port. |
-| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `hiwin_rag_db` / `postgres` / *(none)* | Postgres credentials. **`DB_PASSWORD` is required.** |
+| `COMPLETENESS_MODEL` | `Support_Agent_Aux` (in the committed `.env`; code default = `LANGUAGE_MODEL`) | Small resident model for the per-passage enumeration. |
+| `DB_HOST` / `DB_PORT` | `localhost` / `5432` | Postgres host / port (**pick the right cluster's port**). |
+| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `hiwin_rag_db` / `postgres` / *(required)* | Credentials. |
 | `DB_SCHEMA` | `hiwin_rag` | Schema holding the `data_*` tables. |
-| `DB_SSLMODE` | `prefer` | libpq SSL mode (`prefer` / `disable` / `require`). |
-| `IMAGE_STATIC_ROOT` | *(none)* | Filesystem path to the HIWIN image folder. **Required** for images. |
-| `DEFAULT_LANGUAGE` | `tc` | Language used when the request omits one. |
-| `TEMPERATURE` | `0` | Decoding temperature (0 = deterministic). |
-| `RERANK_DOC_MAX_CHARS` | `2000` | Per-passage char budget sent to the reranker. |
+| `DB_SSLMODE` | `prefer` | libpq SSL mode (`disable` / `require` when debugging handshakes). |
+| `DB_POOL_MAX` | `12` | Max pooled Postgres connections. |
+| `IMAGE_STATIC_ROOT` | *(none)* | Folder served at `/static/HIWIN` and read by the vision step. |
+| `DEFAULT_LANGUAGE` | `tc` | Used when the request omits `language`. |
+| `TEMPERATURE` | `0` | Per-request temperature for the chat model (overrides the preset). |
+| `CHAT_TIMEOUT` | `120` (committed: `30000`) | Per-call timeout (s). Large on purpose: cold loads and long enumerations must not be cut. |
 | `MAX_AGENT_ITERS` | `8` | Max tool-calling rounds per request. |
-| `CHAT_LOG_ENABLED` | `true` | Log each `/chat` exchange to the `hiwin_cs_db` schema (see [Chat logging](#chat-logging)). |
-| `CHAT_TIMEOUT` | `120` | Per-call timeout (s) to the inference server. Raise it if cold model loads exceed it (500s / read timeouts). |
+| `CHAT_LOG_ENABLED` / `CHAT_LOG_SCHEMA` / `CHAT_LOG_TABLE` | `true` / `hiwin_cs_db` / `chat_logs` | Chat logging (see §11). |
 
-The retrieval quality and cost are tunable too — sensible defaults ship, so you
-only touch these to trade recall vs. speed:
+Retrieval quality vs. speed:
 
 | Variable | Default | Description |
 |---|---|---|
 | `VECTOR_TOP_K` | `15` | pgvector rows pulled per table. |
-| `RERANK_CANDIDATE_K` | `20` | passages fed into the reranker. |
-| `RERANK_TOP_K` | `6` | passages kept after reranking (per manual search). |
-| `CERT_RERANK_TOP_K` | `10` | passages kept for certification search. |
-| `GRADING_ENABLED` | `false` | LLM YES/NO relevance filter on each passage. Off — it's a *precision* filter and conflicts with exhaustive recall. |
-| `COMPLETENESS_PASS_ENABLED` | `true` | Re-read each passage to recover rows the draft summarized away. |
-| `COMPLETENESS_MODEL` | `LANGUAGE_MODEL` | Model for the per-passage enumeration — point at a small resident model (e.g. `Support_Agent_Aux`) to speed it up. |
-| `COMPLETENESS_BASE_URL` | `INFERENCE_BASE_URL` | Endpoint for that model (only if served separately). |
-| `COMPLETENESS_CONCURRENCY` | `1` | Enumeration calls in flight at once. Raise if the server has spare parallel slots. |
+| `RERANK_CANDIDATE_K` | `20` | Passages fed to the reranker. |
+| `RERANK_TOP_K` | `6` | Passages kept after reranking (manual search). |
+| `CERT_RERANK_TOP_K` | `10` | Passages kept for certification search. |
+| `RERANK_DOC_MAX_CHARS` | `2000` (committed: `1000`) | Per-passage chars sent to the reranker for scoring only. Lower = faster rerank. |
+| `FIGURE_TEXT_MAX_CHARS` | `120` | Clip verbose figure captions before the model sees them. `-1` disables. |
+| `KEEP_RECENT_TOOL_RESULTS` | `4` (committed: `-1`) | Keep only the N latest tool results in full in context. `-1` = keep all (required for `pre_draft`). |
+| `PARALLEL_TOOL_CALLS` | `true` | Run a turn's tool calls concurrently. |
+| `DB_SEARCH_CONCURRENCY` | `8` | Concurrent per-table vector searches inside one tool call. |
+| `GRADING_ENABLED` | `false` | LLM YES/NO relevance filter per passage. Off: it fights exhaustive recall. |
+| `COMPLETENESS_PASS_ENABLED` | `true` | Re-read each passage to recover rows the draft would summarise away. |
+| `COMPLETENESS_MODE` | `post_draft` (committed: `pre_draft`) | `pre_draft`: extract rows right after each search, draft once. `post_draft`: draft, then enumerate and reconcile. |
+| `COMPLETENESS_CONCURRENCY` | `1` (committed: `4`) | Enumeration calls in flight. With `parallel = 1` on the aux model they just queue. |
 | `COMPLETENESS_TIMEOUT` | `120` | Per-enumeration timeout (s). |
-| `COMPLETENESS_EXPLAIN_NONE` | `true` | Have a non-matching passage explain *why* (debugging aid). |
-| `FIGURE_TEXT_MAX_CHARS` | `120` | Truncate verbose figure descriptions before they reach the model (context saver). |
-| `KEEP_RECENT_TOOL_RESULTS` | `4` | Keep only the N most recent tool results in full in the running context; stub older ones. `-1` disables. |
-| `TRACE_RESULT_MAX_CHARS` | `600` | How much of each tool result the debug trace keeps. `0` = no truncation. |
-| `PARALLEL_TOOL_CALLS` | `true` | Run a turn's tool calls (e.g. several keyword searches) concurrently instead of one-by-one. |
-| `DB_SEARCH_CONCURRENCY` | `8` | Max concurrent per-table vector searches within one manual search. |
-| `DB_POOL_MAX` | `12` | Max Postgres connections in the shared pool (sized for the parallelism above). |
+| `COMPLETENESS_EXPLAIN_NONE` | `true` | A non-matching passage explains why (debug aid, visible in the debug panel). |
+| `VISION_MAX_IMAGES` | `4` | Max figures sent to the vision model per search. |
+| `TRACE_RESULT_MAX_CHARS` | `600` | How much of each tool result the `trace` keeps. `0` = all. |
 
-> **Language codes** (`en` / `jp` / `tc` / `sc`) must match the values stored in the
-> DB's `metadata_->>'language_code'`. Confirm with `python inspect_metadata.py`.
+### `pipeline/settings.json` (pipeline)
 
-> **Building the DB too?** Set the **same** `DB_*` values and embedding model in
-> `pipeline/settings.json` — the backend reads what the pipeline writes. See
-> [Data ingestion pipeline](#data-ingestion-pipeline).
+Edited by the GUI/TUI settings screen or by hand. Common fields: `ROOT_PATH`,
+`IMAGE_TARGET_ROOT`, `DB_*`, `EMBED_MODEL`; advanced: `LLM_BASE_URL`,
+`MODEL_PASS_*`, Pass-1 detection settings, concurrency, behaviour toggles. The
+defaults and documentation for every key live in `pipeline/core/config.py`.
+`EMBED_DIM` (2560) is deliberately **not** editable there — it is tied to the
+embedding model and the existing tables.
 
-> **Internal DB password.** HIWIN's internal deployment uses the database password
-> **`hiwinpassword`** — put it in `.env` (`DB_PASSWORD`) and, for the pipeline, in
-> `pipeline/settings.json` (`DB_PASS`). It is intentionally left in
-> `reference/tools/database_query.py` (preserved open-WebUI provenance) rather than
-> scrubbed. This repository is proprietary / internal use only (see
-> [LICENSE](LICENSE)); **rotate this password** if the project is ever made public
-> or shared externally.
+### `config.ini` (router)
 
-## Model parameters
+One `[section]` per model; keys are `llama-server` flags without `--`. Edit the
+file, restart the router. The comments explain every non-default value (they
+record real incidents — keep them). Two you will touch:
 
-Most generation settings live on the **inference server** — each model's section
-in your `--models-preset` (`config.ini`) — not in this repo. The two
-that matter most:
+- **Temperature** (`temp`): `0` = deterministic. The backend sends its own
+  `TEMPERATURE` per request for the chat model, so the preset's value applies to
+  the pipeline passes and the aux model.
+- **Context size** (`ctx-size`): prompt + output tokens per request; a VRAM
+  setting. `ctx-size` is shared across `parallel` slots.
 
-- **Temperature** (`--temp`, e.g. `--temp 0.7`). How random the output is: `0` is
-  deterministic (same input → same answer), higher values (`0.7`–`1.0`) give more
-  varied wording. Keep it **low/zero for accuracy-sensitive work** — transcribing
-  exact numbers from spec tables — and higher only where natural phrasing matters.
-  - The **backend** additionally sends a per-request `temperature` (the
-    `TEMPERATURE` env var, default `0`; `inference.py`), which **overrides** the
-    server's `--temp` for the support agent.
-  - The **pipeline** passes don't override it, so they use whatever `temp` you
-    set per model in the preset.
-- **Context size** (`--ctx-size`, e.g. `--ctx-size 100000`). The maximum number of
-  tokens (prompt **+** generated output) the model can process in one request.
-  It's a launch-time / VRAM setting: a bigger context needs more GPU memory. Set
-  it large enough for your longest page or table plus the model's answer; if a
-  request exceeds it, the server truncates the input or errors out. The apps never
-  change this — it's fixed by how you launch the model.
+`--models-max` (launcher variable `MODELS_MAX`, default 4) is how many models
+may be resident at once; the four serving models fill it, so pipeline models
+evict one unless you raise it to 6.
 
-Example preset entry (in `config.ini`): `ctx-size = 100000`, `temp = 0.7`,
-… Change these in the preset, then restart the router; no change to this repo is
-needed.
-
-## Running
-
-Run the backend **from the repo root** (the folder with `main.py`), with your
-virtual environment **activated** — `uvicorn` must import `main`, so the working
-directory has to be the repo root:
-
-```bash
-cd /path/to/HIWIN_Support_Agent      # the repo root (where main.py lives)
-# activate the venv:  Windows: .venv\Scripts\activate   |   Linux/macOS: source .venv/bin/activate
-uvicorn main:app --host 0.0.0.0 --port 8079
-```
-
-(Or just use the launcher: `run.bat` on Windows / `./run.sh` on Linux/macOS — it
-activates the venv and starts uvicorn for you.)
-
-- `--host 0.0.0.0` makes it reachable from other machines (mind the firewall).
-- Omit it (or use `--host 127.0.0.1`) to keep it local to the server.
-- Then open `http://localhost:8079/` for the demo, or POST to `/chat` (see [Usage](#usage)).
-
-### Verify each layer (bottom-up smoke test)
-
-If `/chat` misbehaves, test the stack from the bottom up — each command only
-succeeds if the ones before it do, so the **first one that fails points at the
-layer to fix**:
-
-```bash
-# 1. Backend process is up:
-curl http://localhost:8079/health                 # -> {"status":"ok"}
-
-# 2. Inference server reachable (match host/port to INFERENCE_HOST):
-curl http://localhost:11400/v1/models             # -> lists your model aliases
-
-# 3. Postgres reachable + data ingested with the expected language codes:
-python inspect_metadata.py                         # -> prints sample metadata_ rows
-
-# 4. Full end-to-end flow:
-curl -X POST http://localhost:8079/chat \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "HGW20 load capacity", "language": "en"}'
-```
-
-Then cross-reference the failing layer in [Troubleshooting](#troubleshooting).
-
-## Usage
+## 11. Using the API
 
 ### `POST /chat`
 
 ```bash
-curl -X POST http://localhost:8079/chat \
-  -H "Content-Type: application/json" \
+curl -X POST http://localhost:8079/chat -H "Content-Type: application/json" \
   -d '{"prompt": "HGW20 load capacity", "language": "en"}'
 ```
 
-Response:
-
 ```json
 {
-  "response": "### HGW20 Load Capacity …  (markdown, may include ![](/static/HIWIN/…) images)",
+  "response": "### HGW20 Load Capacity … (markdown, may include ![](/static/HIWIN/…) images)",
   "language": "en",
-  "sources": [
-    {"product_type": "linear_guideway", "page_number": 6, "file_name": "…", "language_code": "en"}
-  ],
-  "trace": [
-    {"tool": "db_get_available_product_tables", "args": {}, "result": "…"},
-    {"tool": "db_search_technical_manuals", "args": {"…"}, "result": "…"}
-  ]
+  "sources": [{"product_type": "linear_guideway", "page_number": 6, "file_name": "…", "language_code": "en", "rerank_score": 0.93}],
+  "trace":   [{"tool": "db_get_available_product_tables", "args": {}, "result": "…"}, {"tool": "db_search_technical_manuals", "args": {"…"}, "result": "…"}],
+  "metrics": {"latency_ms": 41230, "llm_calls": 5, "tool_calls": 3, "completeness_calls": 6, "total_tokens": 38112, "by_kind": {"agent": {"calls": 3, "ms": 21000}, "completeness_enum": {…}}, "completeness": [{"source": "[SOURCE: …]", "status": "found", "output": "…"}]}
 }
 ```
 
-- **`response`** — the answer as GitHub-flavored markdown. Render it with any
-  markdown library; inline `![](...)` images resolve against `/static/HIWIN`.
-- **`language`** — optional in the request; defaults to `DEFAULT_LANGUAGE`.
-- **`sources`** — deduplicated citation metadata for the retrieved chunks.
-- **`trace`** — the tools the agent called, in order (handy for debugging).
-
-### Other endpoints
+- `language` is optional (defaults to `DEFAULT_LANGUAGE`); values `en` / `jp` / `tc` / `sc`.
+- `response` is GitHub-flavoured markdown; image links resolve against `/static/HIWIN`.
+- `sources` are pruned to the pages the answer cites; `trace` shows every tool call; `metrics` shows where the time went.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /` | Example demo frontend (served from `frontend/index.html`). |
-| `GET /health` | Liveness check → `{"status": "ok"}`. |
-| `GET /static/HIWIN/...` | Serves the HIWIN figures from `IMAGE_STATIC_ROOT`. |
+| `GET /` | Demo frontend (`frontend/index.html`) with a debug panel. |
+| `GET /health` | Liveness → `{"status": "ok"}`. |
+| `GET /static/HIWIN/...` | Figures from `IMAGE_STATIC_ROOT`. |
 
-### Batch runner
-
-`run_prompts.py` sends a set of requests and saves a JSON report (request, per-request timing, and the full response — answer, sources, trace, metrics):
+### Batch runner and inspection
 
 ```bash
-python run_prompts.py                          # every examples/*.json
-python run_prompts.py examples/tc_load_capacity.json
-export CHAT_URL=http://localhost:8079/chat     # override the endpoint (Linux/macOS)
-set CHAT_URL=http://localhost:8079/chat        # override the endpoint (Windows cmd)
+python run_prompts.py                          # every examples/*.json -> results_<timestamp>.json
+python run_prompts.py examples/tc_load_capacity.json --url http://host:8079/chat --timeout 600
+python inspect_metadata.py --sample            # tables, row counts, language codes, a metadata_ sample
 ```
 
-### Inspecting the DB
+`run_prompts.py` prints per-request latency by call kind and a batch summary —
+the tool for before/after comparisons when tuning.
 
-`python inspect_metadata.py` prints the `metadata_` of a few sample rows — use
-it to confirm the real `language_code` values and citation fields.
+### Chat logging
 
-## Chat logging
+Every `/chat` exchange is inserted into `hiwin_cs_db.chat_logs` (created on
+first use): `created_at`, `language`, `prompt`, `response`, `sources`, `trace`
+(jsonb), `latency_ms`, `llm_calls`, `agent_iterations`, `tool_calls`,
+`prompt_tokens`, `completion_tokens`, `total_tokens`, `generations` (per-call
+timings). Best-effort: a DB hiccup is printed and ignored. Disable with
+`CHAT_LOG_ENABLED=false`.
 
-Every `POST /chat` exchange is recorded to a Postgres table for analytics and
-debugging. It is **on by default** (`CHAT_LOG_ENABLED=true`) and stored in a
-**separate schema — `hiwin_cs_db`** — inside the same database, so it's isolated
-from the RAG data. Logging is **best-effort**: a DB hiccup is printed and ignored,
-never breaking a chat response. The schema and table are created automatically on
-first use (the DB user needs `CREATE` privilege the first time).
+### Demo frontend and debug panel
 
-Each row records:
+`frontend/index.html` is served at `/`: type a prompt, pick a language, see the
+rendered answer, sources and — with **Debug view** on — the metrics strip, the
+tool-call timeline with arguments and results, the completeness pass per passage
+(`✓ found` / `NONE` with reason / `⚠ error`), and the raw JSON. It renders
+markdown with `marked` from a CDN (vendor it if offline); LaTeX is not rendered.
 
-| Column | Meaning |
-|---|---|
-| `created_at` | timestamp |
-| `language`, `prompt`, `response` | request language, user prompt, final answer |
-| `sources`, `trace` | citation list + tool-call trace (jsonb) |
-| `latency_ms` | total wall-clock time for the request |
-| `llm_calls`, `agent_iterations`, `tool_calls` | model generations / agent rounds / tool calls used |
-| `prompt_tokens`, `completion_tokens`, `total_tokens` | token usage, summed across generations |
-| `generations` | jsonb array, per-generation `{duration_ms, prompt_tokens, completion_tokens}` |
+## 12. Data ingestion pipeline
 
-Settings (in `.env`): `CHAT_LOG_ENABLED` (default `true`), `CHAT_LOG_SCHEMA`
-(default `hiwin_cs_db`), `CHAT_LOG_TABLE` (default `chat_logs`). Set
-`CHAT_LOG_ENABLED=false` to turn it off.
-
-## Example demo frontend
-
-`frontend/index.html` is a small, self-contained HTML page served at `/`, meant
-purely to **demonstrate** the API — type a prompt, pick a language, and see the
-markdown answer, inline images, and sources rendered. Treat it as a starting
-point or reference, not a production UI; swap in your own frontend whenever you
-like.
-
-Because it is served from the **same origin** as `/chat` and `/static/HIWIN`,
-the root-relative image links in answers resolve to this backend with no extra
-configuration. (A separate-origin frontend would instead need a reverse proxy or
-absolute image URLs.) It renders markdown with `marked` from a CDN — vendor that
-file locally if the browser is offline; LaTeX (`$M_R$`) needs KaTeX, not included.
-
-### Debug panel
-
-The demo page has a **Debug view** toggle (on by default) — the fastest way to see
-*why* an answer came out the way it did, and the first place to look when
-troubleshooting. Under each answer it shows:
-
-- **Metrics strip** — language, agent iterations, tool/LLM/completeness calls,
-  token usage, and end-to-end latency.
-- **Trace timeline** — every tool call in order, each with its **args** (the
-  `language_code` / `product_table` / query the model searched) and its **result**
-  inline; empty results are flagged, so a bad language filter or a missed table
-  jumps out. (`TRACE_RESULT_MAX_CHARS` controls how much of each result is kept —
-  set it to `0` to read full passages.)
-- **Completeness pass** — per retrieved passage, whether the enumeration `✓ found`
-  rows, returned `NONE` (with the reason, if `COMPLETENESS_EXPLAIN_NONE`), or hit an
-  `⚠ error` (e.g. a timeout).
-- **Sources** — each with its reranker `score`, and a **Raw response JSON** dump.
-
-Everything shown here is also in the raw `/chat` response (`trace`, `sources`,
-`metrics`) and the [chat log](#chat-logging), so you get the same insight from the
-API without the demo page.
-
-## Data ingestion pipeline
-
-This backend **reads** a Postgres + pgvector database; it does not build it. The
-[`pipeline/`](pipeline/) folder is the **upstream** half that does:
+`pipeline/` turns PDFs into the database:
 
 ```
-PDFs ──▶ pipeline/ (layout detect → VLM transcribe → validate → embed) ──▶ Postgres/pgvector ──▶ this backend
+PDFs ─▶ Pass 1 layout detection (ONNX, CPU) ─▶ Pass 2 page → markdown (VLM) ─▶ Pass 2b figure captions
+     ─▶ Pass 3 table → markdown (VLM) ─▶ Pass 3b table summaries ─▶ Pass 4 validation/merge
+     ─▶ Phase 5 organise Final_Output ─▶ Phase 7 embed + insert (per page) + copy figures to IMAGE_TARGET_ROOT
 ```
 
-It detects page layout with an ONNX model, transcribes pages/figures/tables with
-a local vision model, validates the markdown, then embeds each page/section and
-inserts it into the same `hiwin_rag` schema (`data_*` tables, `metadata_` jsonb)
-that the backend's retrieval tools query. The embedding model **must match** the
-backend's `EMBEDDING_MODEL`, and the figure/table images it copies into the web
-static root are what the backend serves at `/static/HIWIN`.
+Checkpointed per document and pass (`<ROOT_PATH>/checkpoint.json`), so an
+interrupted run resumes; timed-out passes are retried once at the end.
 
-### What you must edit before the first run
-
-Almost everything is pre-filled. With your own database you only need to set a few
-**machine-specific paths** (the committed config ships with `/path/to/...`
-placeholders):
-
-| File | Field(s) | Set to |
-|---|---|---|
-| `pipeline/settings.json` | `ROOT_PATH` | your HIWIN data folder (holds `PDFs/`, `PDF_Config.yaml`, the ONNX model) |
-| `pipeline/settings.json` | `IMAGE_TARGET_ROOT` | the web static folder the backend serves at `/static/HIWIN` |
-| `pipeline/models.json` | `model_dir` | the folder llama.cpp loads GGUFs from (the `model` paths in your router preset) |
-| `pipeline/models.json` | each `repo_id` | the Hugging Face repo per GGUF (only if you'll use the downloader) |
-| `<ROOT_PATH>/PDF_Config.yaml` | — | optional — the first run **generates it from `PDFs/` then stops** for review (languages auto-detected from filenames; every page). Check it, then run again. Pre-create from `pipeline/PDF_Config.example.yaml` to skip this. |
-| `.env` (backend) | `IMAGE_STATIC_ROOT` | the same folder as the pipeline's `IMAGE_TARGET_ROOT` (DB password & model names already filled in) |
-
-DB credentials, model names, ports, and tuning are already set for the internal
-deployment — change them only if your setup differs. (On Windows you can use
-either `C:\...` or `C:/...`; forward slashes work on every OS.)
-
-### What goes in the project root (`ROOT_PATH`)
-
-`ROOT_PATH` is the pipeline's data folder. You create it and put **two** things
-inside (the rest is generated automatically):
+### `ROOT_PATH` layout
 
 ```
 <ROOT_PATH>/
-├── PP-DocLayout-PlusL.onnx   # YOU PROVIDE: the layout-detection model (Pass 1).
-│                             #   Must sit directly in ROOT_PATH with this exact name.
-├── PDFs/                     # YOU PROVIDE: source PDFs, nested product/sub-folder/file
-│   └── <product>/<sub-folder>/<file>.pdf
-├── PDF_Config.yaml           # which PDFs/pages to process (auto-created on 1st run, then review & re-run)
-├── Process_Files/            # intermediate per-pass output  (auto-created)
-└── Final_Output/             # final markdown + Figures/Tables (auto-created)
+├── PP-DocLayout-PlusL.onnx   # YOU PROVIDE (exact name, directly here)
+├── PDFs/                     # YOU PROVIDE: <product>/<sub-folder…>/<file>.pdf
+├── PDF_Config.yaml           # which PDFs/pages to process (auto-generated on first run, then reviewed)
+├── checkpoint.json           # progress (auto)
+├── Process_Files/            # per-pass intermediate output (auto) - per-page markdown lives here
+└── Final_Output/             # <product>/<sub_folder>/<lang>/document.md + Figures/ + Tables/ (auto)
 ```
 
-So the **only files you place by hand** are `PP-DocLayout-PlusL.onnx` (directly in
-`ROOT_PATH`) and your PDFs under `PDFs/`. The ONNX model is the PaddleOCR
-PP-DocLayout_plus-L file (see [Prerequisites](#prerequisites)).
+The `<product>` folder name becomes the table `data_<product>` (lower-cased,
+non-alphanumerics → `_`).
 
-### Configuring which PDFs to process (`PDF_Config.yaml`)
+### `PDF_Config.yaml`
 
-The pipeline is driven by a YAML file at `<ROOT_PATH>/PDF_Config.yaml` that lists
-your PDFs.
-
-**If it doesn't exist, the pipeline generates it and then stops** — so you can
-review it *before* anything is processed. On a run with no `PDF_Config.yaml` it
-scans `<ROOT_PATH>/PDFs/` and writes one entry per PDF, **every page included**,
-with each PDF's **language auto-detected from its filename**:
-
-- Japanese kana in the name → `jp`; Chinese characters → `tc`;
-- otherwise a language keycode in the name (e.g. `_en`, `_jp`, `zh-tw`, `zh-cn`);
-- falling back to `DEFAULT_LANGUAGE` (default `tc`; override via the
-  `PIPELINE_DEFAULT_LANGUAGE` env var).
-
-It then **halts with a message asking you to review and edit the generated file**
-(the file also carries a header comment saying so) — confirm each `language` and
-add any `pages_to_exclude` — and **run again** to actually process. Auto-detection
-is best-effort (a kanji-only Japanese title can look Chinese), so a quick check is
-worth it.
-
-You can also write it yourself: copy [`pipeline/PDF_Config.example.yaml`](pipeline/PDF_Config.example.yaml)
-to `<ROOT_PATH>/PDF_Config.yaml` and edit it. It's a tree of nested folders ending
-in one **leaf per PDF**:
+If absent, the first run scans `PDFs/`, writes one entry per PDF with every page
+included and the language guessed from the filename, then **stops** so you can
+review it. Format:
 
 ```yaml
-ballspline:                  # product — top folder & DB table (data_ballspline)
-  user_manual:               # any number of grouping sub-folders (any depth)
-    HG_Series.pdf:           # leaf key = the actual PDF file name
-      language: en           # en | jp | tc | sc  (must match the DB language_code)
-      pages_to_exclude: [0, 1]      # 0-indexed pages to skip (cover, blanks…)
-    LM_Guide.pdf:
-      language: tc
-      pages_to_include: [5, 6, 7]   # if present & non-empty, ONLY these pages
-                                    # run (pages_to_exclude is then ignored)
-linear_guideway:
-  catalog.pdf:
+Ballscrew:                          # product -> PDFs/Ballscrew/, table data_ballscrew
+  Ballscrew-(C).pdf:                # leaf = the PDF filename
+    language: tc                    # en | jp | tc | sc  (= the DB language_code)
+    pages_to_exclude: [0, 1, 2]     # 0-indexed pages to skip
+  Ballscrew-(E).pdf:
     language: en
-    pages_to_exclude: []            # [] = process every page
+    pages_to_include: [5, 6, 7]     # if non-empty, ONLY these pages run
 ```
 
-How it's interpreted:
+Any depth of grouping folders is allowed between product and leaf; they are
+joined into `sub_folder`. Auto-detection maps any Chinese filename to `tc` —
+edit Simplified editions to `sc` by hand (the live config does).
 
-- A node is a **PDF task** when it has a `language` key plus `pages_to_include`
-  **or** `pages_to_exclude`. Everything above it is just folder nesting.
-- The PDF file must exist on disk at
-  `<ROOT_PATH>/PDFs/<product>/<…sub-folders…>/<leaf filename>`.
-- Pages are **0-indexed**. `pages_to_include` wins over `pages_to_exclude` when
-  non-empty. Each may be a list (`[0, 2, 5]`) or a JSON string (`"[0, 2, 5]"`).
-- Output is written to `Final_Output/<product>/<sub-folders joined by _>/<language>/`
-  and ingested into the `data_<product>` table. `Process_Files/` and
-  `Final_Output/` are created automatically.
-
-### Running the pipeline
-
-`pipeline/settings.json` and `pipeline/models.json` are **committed** (already
-filled in for this deployment). Before the first run you only need to **edit the
-file paths** in them for your machine/OS (see
-[What you must edit](#what-you-must-edit-before-the-first-run)). Then:
-
-Run all pipeline commands **from inside the `pipeline/` folder**, with the venv
-**activated** (they import `core` / `Pipeline`, so the working directory must be
-`pipeline/`):
+### Running it
 
 ```bash
-# 1. activate the venv (from the repo root):
-#    Windows:      .venv\Scripts\activate
-#    Linux/macOS:  source .venv/bin/activate
-# 2. enter the pipeline folder:
+# activate the venv first
 cd pipeline
-# 3. pick one:
-python gui.py                 # GUI: settings screen + live per-PDF monitor
-python tui.py                 # TUI: same, in the terminal (best in Windows Terminal, not cmd.exe)
-python Pipeline.py            # headless: full pipeline (no UI; uses settings.json/env)
-python -m ingestion.Ingest    # (re)ingest Final_Output markdown into the DB only
-python -m ingestion.Ingest --db-only   # ingest without copying images to the web root
+python gui.py                 # Tk GUI: settings screen + live per-PDF monitor (EN / 繁中 toggle)
+python tui.py                 # same in the terminal (rich)
+python Pipeline.py            # headless, uses settings.json
+python -m ingestion.Ingest                # (re)embed + insert Final_Output only
+python -m ingestion.Ingest --db-only      # …without copying figures
+python -m ingestion.Ingest --assets-only  # ONLY copy figures/tables into IMAGE_TARGET_ROOT (no DB)
+python -m ingestion.Ingest --force        # re-ingest documents already marked done
 ```
 
-Use **either** front-end — the graphical `gui.py` or the terminal `tui.py`; they
-are interchangeable. Both open on a **settings screen** (an editor over the same
-fields, including a masked **DB password**) and then show a live monitor of every
-PDF and pass. The committed `settings.json` already contains the internal DB
-password; editing it on the settings screen (or setting the `DB_PASS` env var)
-overrides it. Whatever you change on that screen is saved back to `settings.json`.
+`gui.py`, `tui.py`, `Pipeline.py` and `ingestion/Ingest.py` can be started from
+any working directory; the `-m` form still wants `cd pipeline`. The settings
+screen saves to `settings.json`; the DB password field is masked. Per-page
+ingestion (`INGEST_BY_PAGE = true`, the production mode) reads the per-page
+markdown from `Process_Files/…/Pass_3b`, so re-ingesting needs that folder, not
+just `Final_Output`.
 
-Both UIs default to **繁體中文** and carry an **English ⇄ 繁體中文 toggle**: click
-the `中`/`EN` button in the GUI header, or press `l` on the TUI settings screen.
-The setting fields, status, phase, and summary labels all switch language live.
-For fully unattended automation, run `python Pipeline.py` instead (no UI; reads
-`settings.json` / environment variables).
+### Model files
 
-### Downloading model files (optional)
+`pipeline/models.json` lists the GGUF filenames and `model_dir`. The GUI
+(**Download models…**) / TUI (`m`) check which are present and can download
+missing ones from Hugging Face once you fill in `repo_id`s. `doctor.py
+--pipeline` verifies the same list.
 
-The pipeline and backend call your inference server over HTTP — they never load
-GGUFs themselves. As a convenience, the GUI/TUI can check whether the GGUF files
-your server needs are present in a folder and download the missing ones from
-**Hugging Face**, with your confirmation:
+## 13. Maintenance
 
-1. `pipeline/models.json` is committed and already lists the GGUF **filenames**.
-   Edit it to set:
-   - `model_dir` — the folder your llama.cpp server loads GGUFs from
-     (must match the `model` paths in your router preset);
-   - each model's Hugging Face `repo_id` (the repo hosting that exact `.gguf`)
-     — `hf_token` is optional, for gated/private repos (`HF_TOKEN` env also works).
-2. Trigger the check/download:
-   - **GUI** — click **Download models…** on the settings screen;
-   - **TUI** — press `m` on the settings screen.
+[docs/MAINTENANCE.md](docs/MAINTENANCE.md) is the operations manual. It covers:
 
-   It reports which files are present, lists any missing, and — only on your
-   confirmation — downloads them into `model_dir` (resumable, via `huggingface_hub`).
+- **What you may change freely vs. what must stay consistent** (the three
+  config files, the embedding model, `EMBED_DIM`).
+- **Tuning answers**: where each prompt lives (system prompt, language skills,
+  completeness and vision prompts), the retrieval knobs, how to measure with
+  `run_prompts.py` and the chat log, and what changed in the past and why.
+- **Adding, updating or removing documents** in the knowledge base, including
+  the warning about hand-repaired pages ([INGESTION_DEFECTS.md](docs/INGESTION_DEFECTS.md)).
+- **Restoring the figures**, backups, rotating the DB password, updating models
+  or llama.cpp, and a routine checklist.
 
-This only provisions the *files*; you still configure and run the inference
-server yourself. The model **names** in settings are your router preset section
-names, so the manifest is what maps each name to a real Hugging Face repo/file.
+## 14. Troubleshooting
 
-Dependencies for the pipeline are merged into the root
-[`requirements.txt`](requirements.txt) (the heavier ML/vision block), so a single
-`pip install -r requirements.txt` provisions both halves. Configuration is **not**
-shared with the backend's `.env`: the pipeline reads `pipeline/settings.json`
-(GUI-editable; overlays the defaults in `pipeline/core/config.py`). Keep the DB
-name/schema and embedding model in sync between the two.
-
-### How the model names link up
-
-Beyond **downloading** the GGUFs (GUI/TUI) and **hosting** them (llama.cpp router
-mode), no extra wiring is needed — the names chain together automatically:
-
-```
-models.json ──(filename)──> the .gguf in model_dir
-                                   │  the router preset section loads it by name
-                                   ▼
-router preset [section] name ──used by──> pipeline MODEL_PASS_* (settings.json)
-                                          backend LANGUAGE/EMBEDDING/RERANKER_MODEL (.env)
-```
-
-Two name-sets must match — and they already do, as shipped:
-
-1. **Model names** — the `[section]` names in your router preset equal the names
-   the apps request: pipeline `MODEL_PASS_2/2B/3` = `RAG_Pipeline_Pass34`,
-   `MODEL_PASS_3B/4` = `RAG_Pipeline_Pass5Ingest`; backend
-   `LANGUAGE_MODEL` / `EMBEDDING_MODEL` / `RERANKER_MODEL` =
-   `Support_Agent_Qwen3.6` / `Embedding_Qwen3.6` / `Reranker_Qwen3.6`.
-2. **Filenames** — each `models.json` `filename` equals the `model` file its
-   preset section loads, both inside `model_dir`.
-
-So `MODEL_PASS_3` (and the rest) resolve correctly out of the box: the app
-requests the model name, the router loads that section's GGUF. If you ever rename
-a model, change it in **both** places (the router preset and the settings/`.env`),
-and keep `model_dir` pointing at the folder the preset loads from.
-
-## Project structure
-
-```
-HIWIN_Support_Agent/
-├── main.py             # FastAPI app: /chat, /health, /, /static/HIWIN
-├── agent.py            # the LLM tool-calling loop (the STATE machine driver)
-├── rag_tools.py        # the 4 retrieval tools (pgvector → rerank → vision)
-├── tool_schemas.py     # OpenAI function-calling schemas + dispatch
-├── inference.py        # chat / embeddings / rerank HTTP wrappers
-├── db.py               # Postgres access + SQL
-├── prompts.py          # builds system prompt = System_prompt.md + skill
-├── config.py           # env-driven settings (loads .env)
-├── config.ini  # llama.cpp router preset (edit model paths, then launch)
-├── start.bat / start.sh# one-command launch: router (all models) + backend
-├── run.bat / run.sh    # backend-only launch (router already running)
-├── run_prompts.py      # batch tester
-├── inspect_metadata.py # DB metadata inspector
-├── frontend/index.html # example demo frontend
-├── prompts/
-│   ├── System_prompt.md
-│   └── skills/         # english / japanese / traditional_chinese / simplified_chinese
-├── examples/           # sample request payloads
-├── docs/               # ARCHITECTURE (en + zh-Hant)
-├── reference/          # the original open-WebUI filter + tool, for provenance
-└── pipeline/           # data ingestion pipeline (PDF → pgvector DB)
-    ├── Pipeline.py     #   orchestrator (Phase A passes → ingestion)
-    ├── gui.py          #   Tkinter GUI: settings + live monitor
-    ├── tui.py          #   terminal UI (rich): same settings + live monitor
-    ├── pdf_passes/     #   Pass 1 (ONNX layout) → 2/2b/3/3b (VLM) → 4 (validate)
-    ├── ingestion/      #   embed markdown → Postgres/pgvector (Ingest.py)
-    ├── core/           #   config, settings, i18n (en/繁中), checkpointing, utils
-    ├── settings.json          # committed config — edit the file paths per machine
-    ├── models.json            # committed GGUF manifest — edit model_dir + repo_ids
-    └── PDF_Config.example.yaml # copy to <ROOT_PATH>/PDF_Config.yaml; lists the PDFs
-```
-
-## Troubleshooting
+Run `python doctor.py --all` first; then:
 
 | Symptom | Likely cause / fix |
 |---|---|
-| Connection refused / errors calling the inference server (`:11400`) | the router (`llama-server --models-preset`) isn't running, or `INFERENCE_HOST` points at the wrong host/port. Start it (`start.bat`/`start.sh`) and check `curl http://localhost:11400/v1/models` lists your models. |
-| `CREATE EXTENSION vector` fails: *"extension \"vector\" is not available"* | pgvector isn't installed into Postgres (it's a server-side extension, not a pip package). Install the pgvector OS package or use a `pgvector/pgvector` Docker image, then retry. Creating the extension needs a **superuser**. |
-| `fe_sendauth: no password supplied` | `DB_PASSWORD` is empty/unset. Set it in `.env` (repo root — a hidden file; see [Configuration](#configuration)) to the same value as `pipeline/settings.json` → `DB_PASS`, then restart. If it *is* set, `.env` isn't loading — confirm `python-dotenv` is installed (`pip install -r requirements.txt`). |
-| Agent loops (many `db_search_*` calls) then returns a garbled non-answer | Every retrieval is erroring (often the DB-auth issue above) or returning nothing, so the model retries until `MAX_AGENT_ITERS`. Open the **Debug panel** (or the raw `trace`) and the backend console to see what each search returned. |
-| `connection ... server closed the connection unexpectedly` | Postgres only trusts local connections. Run the backend **on the DB server** (use `localhost`), or enable remote access in `pg_hba.conf` / `postgresql.conf`. |
-| `db_search_*` returns *"No results for language…"* | The `language_code` you send doesn't match the DB. Check with `inspect_metadata.py`. |
-| `Reranking failed: HTTP 500 … input is too large … increase the physical batch size` | The reranker's `ubatch-size` is too small. In the router preset set `ubatch-size = 4096` / `batch-size = 4096` on the reranker section, or lower `RERANK_DOC_MAX_CHARS`. |
-| Answers come back but the agent never calls tools | The inference server isn't returning OpenAI-style `tool_calls`. Confirm it supports tool calling; adapt `agent.py` if its format differs. |
-| Answer is incomplete — lists only some products / drops table rows | Check the **Debug panel**: if searches returned the data, it's under-enumeration — keep `COMPLETENESS_PASS_ENABLED=true` and `GRADING_ENABLED=false` (grading can drop relevant pages). If a passage shows `NONE` with a wrong reason, the enumeration is over-filtering. |
-| Responses are very slow (minutes) | Mostly the completeness pass (one model call per retrieved passage) plus cold model loads. Point `COMPLETENESS_MODEL` at a small resident model and raise `COMPLETENESS_CONCURRENCY`; raise `CHAT_TIMEOUT`; or lower `RERANK_TOP_K`. The Debug panel's `completeness_calls` + latency show where the time goes. |
-| `read timeout` / n_ctx overflow on multi-search queries | Raise `CHAT_TIMEOUT` for cold loads; for context overflow lower `RERANK_TOP_K`, `FIGURE_TEXT_MAX_CHARS`, or `KEEP_RECENT_TOOL_RESULTS` (trims old tool results from context). |
-| Images 404 in the demo | `IMAGE_STATIC_ROOT` is unset or points at the wrong folder. Open a `/static/HIWIN/...` URL directly to verify. |
-| Images don't show in a separate frontend | The frontend isn't same-origin. Serve it from this backend, put both behind one reverse proxy, or make image URLs absolute. |
+| `[FAIL] router not reachable` / connection refused on `:11400` | Router not running or `INFERENCE_HOST` wrong. `start.bat` / `start.sh`, then `curl http://localhost:11400/v1/models`. |
+| Router exits at startup | A path in `config.ini` is wrong (`doctor.py` lists each), or not enough VRAM — lower `n-gpu-layers` / `ctx-size`, or pin one GPU (`CUDA_VISIBLE_DEVICES`). |
+| `password authentication failed` | Wrong `DB_PASSWORD`, **or `DB_PORT` points at a different Postgres cluster** (several versions installed). |
+| `fe_sendauth: no password supplied` | `DB_PASSWORD` empty; `.env` missing or not loading (`pip install -r requirements.txt`). |
+| `extension "vector" is not available` | pgvector not installed for *that* Postgres version ([§9](#9-postgresql-and-pgvector)). |
+| `python setup_db.py` → `permission denied to create extension` | Run as a superuser: `--admin-user postgres --admin-password -`. |
+| Restore fails with `unsupported version in file header` | Target Postgres older than the `pg_dump` used; use a plain-SQL dump ([§9](#backups-and-moving-the-database)). |
+| `/usr/bin/env: 'bash\r': No such file` (Linux) | CRLF script: `sed -i 's/\r$//' start.sh run.sh`. |
+| `ImportError: libGL.so.1` (Linux) | Old venv with `opencv-python`; `pip install -r requirements.txt` (now headless) or `apt install libgl1`. |
+| `python3 -m venv` fails (Debian/Ubuntu) | `sudo apt install python3.12-venv`. |
+| Agent loops (many `db_search_*` calls) then a garbled non-answer | Every retrieval errored or returned nothing (usually DB auth). Open the debug panel / `trace`. |
+| `No results for language …` | The `language_code` sent does not match the DB (`inspect_metadata.py`). |
+| `Reranking failed: HTTP 500 … increase the physical batch size` | Raise `ubatch-size` / `batch-size` on the reranker section (4096 shipped) or lower `RERANK_DOC_MAX_CHARS`. |
+| Empty answer after a very long wait | Runaway reasoning; `reasoning-budget = 8192` in `config.ini` prevents it — make sure the router runs *this* preset. |
+| Answers vary between identical runs | Embedding/reranker `parallel` > 1 gives non-identical vectors; the preset pins `parallel = 1`. |
+| Latency jumped from ~1 min to 30+ min | The model got split across GPUs, one of them busy: pin one GPU (`CUDA_VISIBLE_DEVICES=0`, or `device = CUDA0`). |
+| Answer lists only some products / drops rows | Keep `COMPLETENESS_PASS_ENABLED=true`, `GRADING_ENABLED=false`; check the completeness section of the debug panel for `NONE` with a wrong reason. |
+| Responses very slow | Mostly the completeness pass. Point `COMPLETENESS_MODEL` at the small aux model (default), lower `RERANK_TOP_K`, or raise `parallel` on the aux section and `COMPLETENESS_CONCURRENCY`. |
+| Images 404 / no vision analysis | `IMAGE_STATIC_ROOT` unset or the folder does not exist ([MAINTENANCE → Restoring the figures](docs/MAINTENANCE.md#restoring-the-figures)). |
+| Images don't show in a separate frontend | Not same-origin: reverse-proxy both, or make image URLs absolute. |
+| Pipeline: `Final document not found` / files "missing" that exist (Windows) | Paths over 260 chars; the code uses `\\?\` long paths — make sure you run the repo's current pipeline, not an old copy. |
+| Pipeline GUI: `No module named tkinter` | `sudo apt install python3-tk`, or use `tui.py`. |
 
-## Known issues
+## 15. Known issues
 
-- **Mixed catalog revisions across languages.** The DB currently holds different
-  catalog editions per language (e.g. English/Chinese from a newer revision,
-  Japanese from an older one), so some spec values legitimately differ between
-  languages. This is a **data** matter (fix it in the ingestion pipeline), not a
-  backend bug.
-- **LaTeX in the demo frontend.** `$...$` math (e.g. `$M_R$`) renders as literal
-  text; add KaTeX to the demo page if needed.
+- **Mixed catalogue revisions across languages.** Different editions were
+  ingested per language, so some values legitimately differ between languages.
+  A data matter, not a backend bug.
+- **Hand-repaired pages.** Three ballscrew catalogue pages were corrected
+  directly in the database; the pipeline would reintroduce the defects
+  ([INGESTION_DEFECTS.md](docs/INGESTION_DEFECTS.md)).
+- **Figures absent on the current machine** (§3).
+- **`kr` and NULL language rows** exist in a few tables and are never retrieved.
+- **LaTeX in the demo frontend** renders as literal text.
 
-## License
+## 16. Project structure
 
-Proprietary / internal use only. See [LICENSE](LICENSE).
+```
+HIWIN_Support_Agent/
+├── main.py                 # FastAPI app: /chat, /health, /, /static/HIWIN
+├── agent.py                # tool-calling loop + completeness pass
+├── rag_tools.py            # the 4 retrieval tools (pgvector → rerank → vision)
+├── tool_schemas.py         # function-calling schemas + dispatch
+├── inference.py            # chat / embeddings / rerank HTTP wrappers (+ per-call timing)
+├── db.py                   # Postgres pool + SQL + chat-log writer
+├── prompts.py              # system prompt = System_prompt.md + skill
+├── config.py               # env-driven settings (loads .env)
+├── doctor.py               # preflight / diagnostics  (run this first)
+├── setup_db.py             # create DB + pgvector extension + schemas (idempotent)
+├── env_from_settings.py    # sync shared values settings.json -> .env (in place)
+├── inspect_metadata.py     # what is in the DB (tables, counts, language codes)
+├── run_prompts.py          # batch tester with latency breakdown
+├── config.ini              # llama.cpp router preset (edit model paths)
+├── templates/qwen.jinja    # chat template referenced by config.ini
+├── start.bat / start.sh    # router + backend in one command
+├── run.bat / run.sh        # backend only
+├── .env                    # backend config (committed; internal deployment)
+├── requirements.txt / requirements.lock.txt
+├── prompts/                # System_prompt.md + skills/<lang>.md
+├── frontend/index.html     # demo page with debug panel
+├── examples/               # sample /chat payloads (regression set)
+├── docs/                   # ARCHITECTURE, MAINTENANCE, INGESTION_DEFECTS (en + zh-Hant)
+├── reference/              # original open-WebUI filter + tool (provenance only)
+├── AGENTS.md               # brief for AI agents / new developers
+└── pipeline/               # PDF -> pgvector ingestion
+    ├── Pipeline.py         #   orchestrator (passes 1-4, organise, ingest)
+    ├── gui.py / tui.py     #   settings screen + live monitor (Tk / terminal)
+    ├── pdf_passes/         #   Pass_1 (ONNX layout) … Pass_4 (validation) - prompts live here
+    ├── ingestion/Ingest.py #   embed + insert; --db-only / --assets-only / --force
+    ├── core/               #   config defaults, settings schema, i18n, checkpoints, utils
+    ├── settings.json       #   committed pipeline config (this machine's paths)
+    ├── models.json         #   GGUF manifest for the downloader
+    └── PDF_Config.example.yaml
+```
 
-This project depends on third-party software and models; their licenses are listed
-in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Two carry obligations worth
-noting before any external distribution: **PyMuPDF** (AGPL-3.0, pipeline only) and
-the **Gemma** model (Google's Gemma Terms of Use).
+## 17. License
+
+Proprietary / internal use only — see [LICENSE](LICENSE). Third-party
+components and models are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md);
+note **PyMuPDF** (AGPL-3.0, pipeline only) and the **Gemma** model terms before
+any external distribution.
